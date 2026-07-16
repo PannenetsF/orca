@@ -3295,6 +3295,47 @@ describe('Store', () => {
     expect(store.getWorktreeMeta('r2::/other')!.displayName).toBe('other')
   })
 
+  it('removeProject prunes the repo worktrees from workspace session state', async () => {
+    const store = await createStore()
+    store.addRepo(makeRepo({ id: 'r1' }))
+    store.addRepo(makeRepo({ id: 'r2', path: '/repo2' }))
+
+    store.setWorktreeMeta('r1::/path/wt1', { displayName: 'wt1' })
+    store.setWorktreeMeta('r2::/other', { displayName: 'other' })
+
+    store.setWorkspaceSession({
+      ...getDefaultWorkspaceSession(),
+      lastVisitedAtByWorktreeId: { 'r1::/path/wt1': 111, 'r2::/other': 222 }
+    })
+
+    store.removeProject('r1')
+
+    const session = store.getWorkspaceSession()
+    expect(session.lastVisitedAtByWorktreeId?.['r1::/path/wt1']).toBeUndefined()
+    expect(session.lastVisitedAtByWorktreeId?.['r2::/other']).toBe(222)
+  })
+
+  it('removeProject prunes the repo worktrees from per-host workspace session partitions', async () => {
+    const store = await createStore()
+    store.addRepo(makeRepo({ id: 'r1' }))
+
+    store.setWorktreeMeta('r1::/path/wt1', { displayName: 'wt1' })
+
+    const hostId = 'ssh:host-a'
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { 'r1::/path/wt1': 333 }
+      },
+      hostId
+    )
+
+    store.removeProject('r1')
+
+    const hostSession = store.getWorkspaceSession(hostId)
+    expect(hostSession.lastVisitedAtByWorktreeId?.['r1::/path/wt1']).toBeUndefined()
+  })
+
   it('removeProject removes the derived project host setup compatibility record', async () => {
     const store = await createStore()
     store.addRepo(makeRepo({ id: 'r1' }))
