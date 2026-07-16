@@ -567,8 +567,10 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     group: 'Tabs',
     scope: 'tabs',
     searchKeywords: ['shortcut', 'tab', 'simulator', 'emulator', 'mobile', 'ios', 'new'],
+    // Why: keep explorer on Mod+Shift+E (VS Code muscle memory). Emulator is
+    // macOS-only and less common, so it yields to a free chord (#8533).
     defaultBindings: {
-      darwin: ['Mod+Shift+E'],
+      darwin: ['Mod+Alt+Shift+E'],
       linux: [],
       win32: []
     }
