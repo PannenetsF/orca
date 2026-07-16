@@ -4237,9 +4237,46 @@ export class Store {
       hostMembership.set(key, result)
       return result
     }
+    // Why: collect the owner keys before deleting worktreeMeta below, because
+    // belongsToHost reads meta.hostId to classify host-scoped keys. Workspace
+    // session state (legacy blob + per-host partitions) references worktrees by
+    // the same `${repoId}::${path}` owner key; if it is not pruned here, a
+    // deleted project's worktrees stay in lastVisitedAtByWorktreeId /
+    // sleepingAgentSessionsByPaneKey and get re-materialized into worktreeMeta on
+    // the next launch, surfacing as an orphaned "unknown" workspace.
+    const ownerKeysToPrune = new Set<string>()
+    const collectOwnerKeys = (keys: Iterable<string>): void => {
+      for (const key of keys) {
+        if (belongsToHost(key)) {
+          ownerKeysToPrune.add(key)
+        }
+      }
+    }
+    collectOwnerKeys(Object.keys(this.state.worktreeMeta))
+    collectOwnerKeys(Object.keys(this.state.workspaceSession?.lastVisitedAtByWorktreeId ?? {}))
+    for (const session of Object.values(this.state.workspaceSessionsByHostId ?? {})) {
+      collectOwnerKeys(Object.keys(session?.lastVisitedAtByWorktreeId ?? {}))
+    }
+
     for (const key of Object.keys(this.state.worktreeMeta)) {
       if (belongsToHost(key)) {
         delete this.state.worktreeMeta[key]
+      }
+    }
+    for (const ownerKey of ownerKeysToPrune) {
+      this.state.workspaceSession = removeWorkspaceSessionOwner(
+        this.state.workspaceSession,
+        ownerKey
+      )!
+      if (this.state.workspaceSessionsByHostId) {
+        for (const [partitionHostId, session] of Object.entries(
+          this.state.workspaceSessionsByHostId
+        )) {
+          const pruned = removeWorkspaceSessionOwner(session, ownerKey)
+          if (pruned) {
+            this.state.workspaceSessionsByHostId[partitionHostId] = pruned
+          }
+        }
       }
     }
     for (const [childId, lineage] of Object.entries(this.state.worktreeLineageById)) {
