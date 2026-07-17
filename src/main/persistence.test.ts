@@ -3618,6 +3618,58 @@ describe('Store', () => {
     expect(store.getWorkspaceSession('ssh:ssh-a').lastVisitedAtByWorktreeId?.['shared::/repo']).toBe(222)
   })
 
+  it('removeProjectForHost prunes only the removed host when a third host also shares the owner key', async () => {
+    const store = await createStore()
+    // Same repo id + path on local and two SSH hosts, so the owner key
+    // `shared::/repo` is identical across all three. Removing one non-local host
+    // must prune only that host's partition and leave both the local session and
+    // the other surviving SSH host intact.
+    store.addRepo(makeRepo({ id: 'shared', path: '/repo' }))
+    store.addRepo(
+      makeRepo({
+        id: 'shared',
+        path: '/repo',
+        connectionId: 'ssh-a',
+        executionHostId: 'ssh:ssh-a'
+      })
+    )
+    store.addRepo(
+      makeRepo({
+        id: 'shared',
+        path: '/repo',
+        connectionId: 'ssh-b',
+        executionHostId: 'ssh:ssh-b'
+      })
+    )
+    store.setWorktreeMeta('shared::/repo', { displayName: 'local', hostId: 'local' })
+
+    store.setWorkspaceSession({
+      ...getDefaultWorkspaceSession(),
+      lastVisitedAtByWorktreeId: { 'shared::/repo': 111 }
+    })
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { 'shared::/repo': 222 }
+      },
+      'ssh:ssh-a'
+    )
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { 'shared::/repo': 333 }
+      },
+      'ssh:ssh-b'
+    )
+
+    store.removeProjectForHost('shared', 'ssh:ssh-a')
+
+    // Only the removed host's partition is pruned; local and the other SSH host survive.
+    expect(store.getWorkspaceSession('ssh:ssh-a').lastVisitedAtByWorktreeId?.['shared::/repo']).toBeUndefined()
+    expect(store.getWorkspaceSession().lastVisitedAtByWorktreeId?.['shared::/repo']).toBe(111)
+    expect(store.getWorkspaceSession('ssh:ssh-b').lastVisitedAtByWorktreeId?.['shared::/repo']).toBe(333)
+  })
+
   it('reorderReposForHost independently reorders local and SSH rows with shared ids', async () => {
     const store = await createStore()
     store.addRepo(makeRepo({ id: 'shared', path: '/local/shared' }))
