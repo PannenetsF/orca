@@ -505,6 +505,7 @@ function gcOrphanedRepoState(state: PersistedState): number {
   for (const [childId, lineage] of Object.entries(state.worktreeLineageById)) {
     if (isOrphanKey(childId) || isOrphanKey(lineage.parentWorktreeId)) {
       delete state.worktreeLineageById[childId]
+      removed++
     }
   }
   for (const [childKey, lineage] of Object.entries(state.workspaceLineageByChildKey)) {
@@ -515,6 +516,7 @@ function gcOrphanedRepoState(state: PersistedState): number {
       (parentScope?.type === 'worktree' && isOrphanKey(parentScope.worktreeId))
     ) {
       delete state.workspaceLineageByChildKey[childKey as WorkspaceKey]
+      removed++
     }
   }
   for (const ownerKey of orphanOwnerKeys) {
