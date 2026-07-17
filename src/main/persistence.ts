@@ -401,6 +401,103 @@ function gcStaleWorktreeMeta(state: PersistedState): number {
   return removed
 }
 
+// Why: worktreeMeta / lineage / workspace-session entries are keyed
+// `${repoId}::${path}`, but the only cleanup that runs on project removal —
+// pruneWorktreeStateForRepo — is reachable solely through removeProject /
+// removeProjectForHost, both of which require the repo to still be in `repos`.
+// So a repo id that leaves `repos` by any OTHER path (a partial/interrupted
+// delete, a repo-id re-key/migration, or a crash between the repos filter and
+// the save) is never routed through prune again, and its entries become
+// ownerless. gcStaleWorktreeMeta cannot reclaim them either: it keeps an entry
+// whose path still exists on disk (a duplicate that shares a live repo's path —
+// existsSync is true) or whose meta carries a remote hostId. The ownerless
+// worktreeMeta row is then restored verbatim on every load, and its surviving
+// workspaceSession `tabsByWorktree` twin is re-materialized into a phantom
+// "unknown"/duplicate workspace on the next launch (hydrateHeadlessMobileSession
+// TabsFromWorkspaceSession iterates tabsByWorktree with no repo gate). This
+// sweep enforces the missing invariant on load — worktree and session state
+// must not outlive its owning repo/project id — and reuses removeWorkspaceSession
+// Owner so it and the delete path share one cleanup.
+function gcOrphanedRepoState(state: PersistedState): number {
+  const liveOwnerIds = new Set<string>()
+  for (const repo of state.repos) {
+    liveOwnerIds.add(repo.id)
+  }
+  for (const project of state.projects ?? []) {
+    liveOwnerIds.add(project.id)
+  }
+  // Why: an owner set of zero means every key would look orphaned. A validly
+  // parsed profile only reaches that state when the user removed their last
+  // repo (no sidebar to show a duplicate in anyway); refusing to sweep also
+  // fails safe if repos ever loads empty unexpectedly, so we never wipe all
+  // worktree/session state off a single anomalous load.
+  if (liveOwnerIds.size === 0) {
+    return 0
+  }
+  const ownerIdOf = (key: string): string | null => {
+    const separator = key.indexOf('::')
+    return separator === -1 ? null : key.slice(0, separator)
+  }
+  const isOrphanKey = (key: string): boolean => {
+    const ownerId = ownerIdOf(key)
+    return ownerId !== null && !liveOwnerIds.has(ownerId)
+  }
+
+  // Collect ownerless session keys before deleting worktreeMeta so a key that
+  // lives only in worktreeMeta is still pruned from any session twin.
+  const orphanOwnerKeys = new Set<string>()
+  const collectOrphanKeys = (keys: Iterable<string>): void => {
+    for (const key of keys) {
+      if (isOrphanKey(key)) {
+        orphanOwnerKeys.add(key)
+      }
+    }
+  }
+  collectOrphanKeys(Object.keys(state.worktreeMeta))
+  collectOrphanKeys(Object.keys(state.workspaceSession.tabsByWorktree ?? {}))
+  collectOrphanKeys(Object.keys(state.workspaceSession.lastVisitedAtByWorktreeId ?? {}))
+  for (const session of Object.values(state.workspaceSessionsByHostId ?? {})) {
+    collectOrphanKeys(Object.keys(session?.tabsByWorktree ?? {}))
+    collectOrphanKeys(Object.keys(session?.lastVisitedAtByWorktreeId ?? {}))
+  }
+
+  let removed = 0
+  for (const key of Object.keys(state.worktreeMeta)) {
+    if (isOrphanKey(key)) {
+      delete state.worktreeMeta[key]
+      removed++
+    }
+  }
+  for (const [childId, lineage] of Object.entries(state.worktreeLineageById)) {
+    if (isOrphanKey(childId) || isOrphanKey(lineage.parentWorktreeId)) {
+      delete state.worktreeLineageById[childId]
+    }
+  }
+  for (const [childKey, lineage] of Object.entries(state.workspaceLineageByChildKey)) {
+    const childScope = parseWorkspaceKey(childKey)
+    const parentScope = parseWorkspaceKey(lineage.parentWorkspaceKey)
+    if (
+      (childScope?.type === 'worktree' && isOrphanKey(childScope.worktreeId)) ||
+      (parentScope?.type === 'worktree' && isOrphanKey(parentScope.worktreeId))
+    ) {
+      delete state.workspaceLineageByChildKey[childKey as WorkspaceKey]
+    }
+  }
+  for (const ownerKey of orphanOwnerKeys) {
+    state.workspaceSession = removeWorkspaceSessionOwner(state.workspaceSession, ownerKey)!
+    if (state.workspaceSessionsByHostId) {
+      for (const [partitionHostId, session] of Object.entries(state.workspaceSessionsByHostId)) {
+        const pruned = removeWorkspaceSessionOwner(session, ownerKey)
+        if (pruned) {
+          state.workspaceSessionsByHostId[partitionHostId as ExecutionHostId] = pruned
+        }
+      }
+    }
+    removed++
+  }
+  return removed
+}
+
 function readGithubCacheSnapshot(dataFile: string): PersistedState['githubCache'] | null {
   try {
     const parsed = JSON.parse(readFileSync(getGithubCacheFile(dataFile), 'utf-8')) as unknown
@@ -3361,6 +3458,14 @@ export class Store {
     result = folderScopeConnectionMigration.state
 
     if (gcStaleWorktreeMeta(result) > 0) {
+      this.loadNeedsSave = true
+    }
+
+    // Why: reclaim worktree/session state whose owning repo id is gone from
+    // `repos`/`projects` — entries gcStaleWorktreeMeta deliberately keeps (path
+    // exists / remote host) and that pruneWorktreeStateForRepo can no longer
+    // reach, which otherwise resurface as a phantom duplicate workspace.
+    if (gcOrphanedRepoState(result) > 0) {
       this.loadNeedsSave = true
     }
 

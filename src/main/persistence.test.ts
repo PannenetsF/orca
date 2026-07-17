@@ -5366,6 +5366,96 @@ describe('Store', () => {
     expect(Object.keys(store.getAllWorktreeMeta())).toContain(folderInstanceKey)
   })
 
+  it('sweeps worktreeMeta for a repo id absent from repos even when its path is live or its host is remote', async () => {
+    const OLD = Date.now() - 40 * 24 * 60 * 60 * 1000
+    const meta = (extra: Record<string, unknown> = {}) => ({
+      displayName: '',
+      comment: '',
+      lastActivityAt: OLD,
+      ...extra
+    })
+    // testState.dir exists on disk (writeDataFile mkdir's it), so the orphan
+    // sharing the live repo's path is exactly the case gcStaleWorktreeMeta keeps
+    // (existsSync true) — the reported duplicate.
+    const livePath = testState.dir
+    const liveKey = `live-repo::${livePath}`
+    const orphanSamePathKey = `orphan-repo::${livePath}`
+    const orphanRemoteHostKey = `orphan-repo::/home/tiger/gone`
+    writeDataFile({
+      repos: [makeRepo({ id: 'live-repo', path: livePath })],
+      worktreeMeta: {
+        [liveKey]: meta(),
+        [orphanSamePathKey]: meta(),
+        [orphanRemoteHostKey]: meta({ hostId: 'ssh:conn-x' })
+      }
+    })
+
+    const store = await createStore()
+    const kept = Object.keys(store.getAllWorktreeMeta())
+
+    expect(kept).toContain(liveKey)
+    expect(kept).not.toContain(orphanSamePathKey) // gcStale keeps it (path exists); orphan sweep removes it
+    expect(kept).not.toContain(orphanRemoteHostKey) // gcStale keeps it (remote host); orphan sweep removes it
+  })
+
+  it('sweeps workspace-session owner keys for a repo id absent from repos, across the legacy blob and host partitions', async () => {
+    const liveKey = `live-repo::${testState.dir}`
+    const orphanKey = 'orphan-repo::/home/tiger/workspace/libtorch'
+    const liveTab = makeTerminalTab({ id: 'live-tab', worktreeId: liveKey })
+    const orphanTab = makeTerminalTab({ id: 'orphan-tab', worktreeId: orphanKey })
+    const sshHost = toSshExecutionHostId('conn-1')
+    writeDataFile({
+      repos: [makeRepo({ id: 'live-repo', path: testState.dir })],
+      worktreeMeta: { [liveKey]: { displayName: '', comment: '', lastActivityAt: 1 } },
+      workspaceSession: {
+        ...getDefaultWorkspaceSession(),
+        activeWorktreeId: orphanKey,
+        activeWorktreeIdsOnShutdown: [orphanKey, liveKey],
+        tabsByWorktree: { [liveKey]: [liveTab], [orphanKey]: [orphanTab] },
+        terminalLayoutsByTabId: {
+          'live-tab': { root: null, activeLeafId: null, expandedLeafId: null },
+          'orphan-tab': { root: null, activeLeafId: null, expandedLeafId: null }
+        },
+        lastVisitedAtByWorktreeId: { [liveKey]: 5, [orphanKey]: 9 }
+      },
+      workspaceSessionsByHostId: {
+        [sshHost]: {
+          ...getDefaultWorkspaceSession(),
+          tabsByWorktree: { [orphanKey]: [orphanTab] },
+          lastVisitedAtByWorktreeId: { [orphanKey]: 9 }
+        }
+      }
+    })
+
+    const store = await createStore()
+    const legacy = store.getWorkspaceSession()
+
+    expect(legacy.tabsByWorktree[liveKey]).toBeDefined()
+    expect(legacy.tabsByWorktree[orphanKey]).toBeUndefined()
+    expect(legacy.lastVisitedAtByWorktreeId?.[liveKey]).toBe(5)
+    expect(legacy.lastVisitedAtByWorktreeId?.[orphanKey]).toBeUndefined()
+    expect(legacy.terminalLayoutsByTabId['live-tab']).toBeDefined()
+    expect(legacy.terminalLayoutsByTabId['orphan-tab']).toBeUndefined()
+    expect(legacy.activeWorktreeId).toBeNull()
+    expect(legacy.activeWorktreeIdsOnShutdown).toEqual([liveKey])
+
+    const hostSession = store.getWorkspaceSession(sshHost)
+    expect(hostSession.tabsByWorktree[orphanKey]).toBeUndefined()
+  })
+
+  it('does not wipe worktree state when there are no live repos (guards an anomalous empty-owner load)', async () => {
+    const key = 'some-repo::/home/tiger/gone'
+    writeDataFile({
+      repos: [],
+      worktreeMeta: {
+        [key]: { displayName: '', comment: '', lastActivityAt: 1, hostId: 'ssh:conn-1' }
+      }
+    })
+
+    const store = await createStore()
+    expect(Object.keys(store.getAllWorktreeMeta())).toContain(key)
+  })
+
   it('never GCs Linux-style WSL worktree paths on Windows', async () => {
     const OLD = Date.now() - 40 * 24 * 60 * 60 * 1000
     const wslLinkedKey = 'r1::/home/user/gone-worktree'
