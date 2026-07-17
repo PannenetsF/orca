@@ -21,9 +21,10 @@ export type NetworkInterface = {
 
 // Why: link-local IPv6 addresses (fe80::/10) require a scope/zone id to be
 // connectable and never work as a QR-advertised pairing host, so they are
-// excluded from the pickable list.
+// excluded from the pickable list. The regex covers the full /10 range
+// (fe80: through febf:), not just the fe80: prefix the OS usually assigns.
 function isUsableIPv6Address(address: string): boolean {
-  return !/^fe80:/i.test(address)
+  return !/^fe[89ab][0-9a-f]:/i.test(address)
 }
 
 // Why: the WebSocket transport advertises 0.0.0.0 as its endpoint, which isn't
