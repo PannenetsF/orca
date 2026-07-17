@@ -3411,6 +3411,72 @@ describe('Store', () => {
     expect(store.getWorktreeMeta('shared::/remote/repo/wt')).toBeUndefined()
   })
 
+  it('removeProjectForHost keeps the surviving host session for a shared repo id + path', async () => {
+    const store = await createStore()
+    // Same repo id AND same path on both local and an SSH host, so the owner key
+    // `shared::/repo` is identical across hosts. The host-scoped prune must only
+    // touch the removed host's session partition.
+    store.addRepo(makeRepo({ id: 'shared', path: '/repo' }))
+    store.addRepo(
+      makeRepo({
+        id: 'shared',
+        path: '/repo',
+        connectionId: 'ssh-a',
+        executionHostId: 'ssh:ssh-a'
+      })
+    )
+    store.setWorktreeMeta('shared::/repo', { displayName: 'local', hostId: 'local' })
+
+    store.setWorkspaceSession({
+      ...getDefaultWorkspaceSession(),
+      lastVisitedAtByWorktreeId: { 'shared::/repo': 111 }
+    })
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { 'shared::/repo': 222 }
+      },
+      'ssh:ssh-a'
+    )
+
+    store.removeProjectForHost('shared', 'ssh:ssh-a')
+
+    // The removed SSH host's session is pruned; the surviving local session stays.
+    expect(store.getWorkspaceSession('ssh:ssh-a').lastVisitedAtByWorktreeId?.['shared::/repo']).toBeUndefined()
+    expect(store.getWorkspaceSession().lastVisitedAtByWorktreeId?.['shared::/repo']).toBe(111)
+  })
+
+  it('removeProjectForHost on the local host keeps a surviving SSH host session', async () => {
+    const store = await createStore()
+    store.addRepo(makeRepo({ id: 'shared', path: '/repo' }))
+    store.addRepo(
+      makeRepo({
+        id: 'shared',
+        path: '/repo',
+        connectionId: 'ssh-a',
+        executionHostId: 'ssh:ssh-a'
+      })
+    )
+    store.setWorktreeMeta('shared::/repo', { displayName: 'local', hostId: 'local' })
+
+    store.setWorkspaceSession({
+      ...getDefaultWorkspaceSession(),
+      lastVisitedAtByWorktreeId: { 'shared::/repo': 111 }
+    })
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { 'shared::/repo': 222 }
+      },
+      'ssh:ssh-a'
+    )
+
+    store.removeProjectForHost('shared', 'local')
+
+    expect(store.getWorkspaceSession().lastVisitedAtByWorktreeId?.['shared::/repo']).toBeUndefined()
+    expect(store.getWorkspaceSession('ssh:ssh-a').lastVisitedAtByWorktreeId?.['shared::/repo']).toBe(222)
+  })
+
   it('reorderReposForHost independently reorders local and SSH rows with shared ids', async () => {
     const store = await createStore()
     store.addRepo(makeRepo({ id: 'shared', path: '/local/shared' }))
