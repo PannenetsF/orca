@@ -1890,6 +1890,99 @@ describe('repos:add + repos:clone', () => {
     expect(mockStore.addRepo).not.toHaveBeenCalled()
   })
 
+  it('sets up an imported folder for a project that lives only on a remote runtime', async () => {
+    // Why: the project github:pytorch/pytorch was created on a remote Orca
+    // server, so the desktop-local store has no project record for it. Adding a
+    // local host must still succeed (regression for the "Project not found:
+    // github:pytorch/pytorch" crash) by stamping the identity from the id.
+    const importedPath = '/tmp/pytorch-local'
+    const added: Record<string, unknown>[] = []
+    mockStore.getRepos.mockImplementation(() => added)
+    mockStore.addRepo.mockImplementation((repo: Record<string, unknown>) => {
+      added.push(repo)
+    })
+    mockStore.updateRepo.mockImplementation(
+      (id: string, updates: Record<string, unknown>) => {
+        const repo = added.find((entry) => entry.id === id)
+        if (!repo) {
+          return null
+        }
+        Object.assign(repo, updates)
+        return { ...repo }
+      }
+    )
+    // The local store only learns the project once the imported repo's upstream
+    // is stamped from the runtime-only project's identity.
+    mockStore.getProjects.mockImplementation(() =>
+      added.some((entry) => {
+        const upstream = entry.upstream as { owner?: string; repo?: string } | undefined
+        return upstream?.owner === 'pytorch' && upstream?.repo === 'pytorch'
+      })
+        ? [
+            {
+              id: 'github:pytorch/pytorch',
+              displayName: 'pytorch',
+              badgeColor: DEFAULT_REPO_BADGE_COLOR,
+              providerIdentity: { provider: 'github', owner: 'pytorch', repo: 'pytorch' },
+              sourceRepoIds: added.map((entry) => entry.id),
+              createdAt: 0,
+              updatedAt: 0
+            }
+          ]
+        : []
+    )
+
+    const result = (await handlers.get('projectHostSetups:setupExistingFolder')!(null, {
+      projectId: 'github:pytorch/pytorch',
+      hostId: 'local',
+      path: importedPath,
+      kind: 'git',
+      setupMethod: 'imported-existing-folder'
+    })) as { project: { id: string }; setup: { projectId: string } }
+
+    expect(mockStore.addRepo).toHaveBeenCalled()
+    expect(added[0]?.upstream).toEqual({ owner: 'pytorch', repo: 'pytorch' })
+    expect(result.project.id).toBe('github:pytorch/pytorch')
+    expect(result.setup.projectId).toBe('github:pytorch/pytorch')
+  })
+
+  it('rolls back a freshly imported repo when it cannot be aligned with the project', async () => {
+    // Why: with the upfront guard gone, a non-GitHub project whose id cannot be
+    // reconstructed (e.g. a GitLab project that lives only on a remote runtime)
+    // and a folder that does not match must fail atomically — no orphaned repo.
+    const importedPath = '/tmp/mismatch-local'
+    const added: Record<string, unknown>[] = []
+    mockStore.getRepos.mockImplementation(() => added)
+    mockStore.addRepo.mockImplementation((repo: Record<string, unknown>) => {
+      added.push(repo)
+    })
+    mockStore.updateRepo.mockImplementation(
+      (id: string, updates: Record<string, unknown>) => {
+        const repo = added.find((entry) => entry.id === id)
+        if (!repo) {
+          return null
+        }
+        Object.assign(repo, updates)
+        return { ...repo }
+      }
+    )
+    // Non-GitHub project id with no local record: identity cannot be derived.
+    mockStore.getProjects.mockReturnValue([])
+
+    await expect(
+      handlers.get('projectHostSetups:setupExistingFolder')!(null, {
+        projectId: 'git:gitlab.example/team/app',
+        hostId: 'local',
+        path: importedPath,
+        kind: 'git',
+        setupMethod: 'imported-existing-folder'
+      })
+    ).rejects.toThrow('Imported folder does not match the selected project identity.')
+
+    expect(mockStore.addRepo).toHaveBeenCalled()
+    expect(mockStore.removeProject).toHaveBeenCalledWith(added[0]?.id)
+  })
+
   it('prepares and invalidates roots when repos:update changes worktree base path', () => {
     const updated = {
       id: 'repo-update-root',

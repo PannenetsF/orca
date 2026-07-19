@@ -193,7 +193,8 @@ import {
 } from '../../shared/worktree-id'
 import {
   getProjectHostSetupForRepo,
-  getProjectHostSetupWorktreeMeta
+  getProjectHostSetupWorktreeMeta,
+  parseProjectProviderIdentity
 } from '../../shared/project-host-setup-projection'
 import { parsePtySessionId } from '../../shared/pty-session-id-format'
 import { clampLinearIssueListLimit } from '../../shared/linear-issue-read-limits'
@@ -12594,17 +12595,21 @@ export class OrcaRuntimeService {
     let repo = await this.addRepo(args.path, args.kind === 'folder' ? 'folder' : 'git', args.hostId)
     let setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
     if (setup.projectId !== args.projectId) {
-      const existingProject = this.listProjects().find((project) => project.id === args.projectId)
-      if (
-        !existingProject?.providerIdentity ||
-        existingProject.providerIdentity.provider !== 'github'
-      ) {
+      // Why: the project can live only on another host (e.g. the desktop-local
+      // store), so fall back to the identity encoded in the project id when this
+      // runtime has no project record to read `providerIdentity` from.
+      const existingProject = this.listProjects().find(
+        (project) => project.id === args.projectId
+      )
+      const identity =
+        existingProject?.providerIdentity ?? parseProjectProviderIdentity(args.projectId)
+      if (!identity || identity.provider !== 'github') {
         throw new Error('Imported folder does not match the selected project identity.')
       }
       const updated = this.store.updateRepo(repo.id, {
         upstream: {
-          owner: existingProject.providerIdentity.owner,
-          repo: existingProject.providerIdentity.repo
+          owner: identity.owner,
+          repo: identity.repo
         }
       })
       if (!updated) {

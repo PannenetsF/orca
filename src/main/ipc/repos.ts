@@ -86,7 +86,10 @@ import { getCohortAtEmit } from '../telemetry/cohort-classifier'
 import type { RepoMethod } from '../../shared/telemetry-events'
 import { detectRepoIconAndUpstream } from '../repo-icon-autodetect'
 import { enrichMissingRepoGitRemoteIdentities } from '../repo-git-remote-identity-enrichment'
-import { getProjectHostSetupForRepo } from '../../shared/project-host-setup-projection'
+import {
+  getProjectHostSetupForRepo,
+  parseProjectProviderIdentity
+} from '../../shared/project-host-setup-projection'
 import {
   getRepoExecutionHostId,
   normalizeExecutionHostId,
@@ -153,8 +156,12 @@ function alignRepoWithRequestedProject(
 ): ProjectHostSetupResult {
   let setup = getProjectHostSetupForRepo(store.getProjectHostSetups(), repo)
   if (setup.projectId !== projectId) {
+    // Why: the requested project can live only on another host (e.g. a remote
+    // Orca server), so fall back to the identity encoded in the project id when
+    // there is no local project record to read `providerIdentity` from.
     const project = store.getProjects().find((entry) => entry.id === projectId)
-    if (!project?.providerIdentity || project.providerIdentity.provider !== 'github') {
+    const identity = project?.providerIdentity ?? parseProjectProviderIdentity(projectId)
+    if (!identity || identity.provider !== 'github') {
       throw new Error('Imported folder does not match the selected project identity.')
     }
     // Why: setup-on-host is an explicit user action for this project. When the
@@ -162,8 +169,8 @@ function alignRepoWithRequestedProject(
     // identity, stamp that identity so compatibility projection can merge it.
     const updated = store.updateRepo(repo.id, {
       upstream: {
-        owner: project.providerIdentity.owner,
-        repo: project.providerIdentity.repo
+        owner: identity.owner,
+        repo: identity.repo
       }
     })
     if (!updated) {
@@ -1274,11 +1281,10 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       if (!parsedHost) {
         throw new Error(`Unsupported host: ${args.hostId}`)
       }
-      const existingProject = store.getProjects().find((project) => project.id === args.projectId)
-      if (!existingProject) {
-        throw new Error(`Project not found: ${args.projectId}`)
-      }
-
+      // Why: the project may exist only on another host (e.g. a remote Orca
+      // server) and therefore have no local record; importing the folder still
+      // creates it locally, and alignRepoWithRequestedProject reconciles the
+      // identity — so we must not reject on a missing local project here.
       const result =
         parsedHost.kind === 'local'
           ? await addLocalRepoFromPath(store, args.path, args.kind)
@@ -1296,15 +1302,26 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       if ('error' in result) {
         throw new Error(result.error)
       }
+      // Why: align before broadcasting/telemetry so a mismatched import fails
+      // atomically — roll back a freshly-added repo instead of leaving it
+      // orphaned in the store when it can't be linked to the requested project.
+      let aligned: ProjectHostSetupResult
+      try {
+        aligned = alignRepoWithRequestedProject(
+          store,
+          result.repo,
+          args.projectId,
+          args.setupMethod
+        )
+      } catch (err) {
+        if (!result.alreadyExisted) {
+          store.removeProject(result.repo.id)
+        }
+        throw err
+      }
       invalidateAuthorizedRootsCache()
       notifyReposChanged(mainWindow)
       emitRepoAdded('folder_picker', result.alreadyExisted)
-      const aligned = alignRepoWithRequestedProject(
-        store,
-        result.repo,
-        args.projectId,
-        args.setupMethod
-      )
       if (result.alreadyExisted) {
         await prepareLocalWorktreeRootForRepo(store, aligned.repo)
       }

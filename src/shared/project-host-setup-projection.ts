@@ -88,6 +88,29 @@ function getProjectId(
   return getProjectIdentityKey(repo)
 }
 
+/**
+ * Inverse of {@link getProjectIdentityKey} for GitHub project ids. Lets host
+ * setup reconstruct the provider identity from the project id alone, so a repo
+ * can be aligned with a project that exists only on another host (e.g. a remote
+ * Orca server) and therefore has no local project record to read it from.
+ */
+export function parseProjectProviderIdentity(projectId: string): ProjectProviderIdentity | null {
+  const githubPrefix = 'github:'
+  if (!projectId.startsWith(githubPrefix)) {
+    return null
+  }
+  const parts = projectId.slice(githubPrefix.length).split('/')
+  if (parts.length !== 2) {
+    return null
+  }
+  const owner = parts[0]?.trim()
+  const repo = parts[1]?.trim()
+  if (!owner || !repo) {
+    return null
+  }
+  return { provider: 'github', owner, repo }
+}
+
 function parseGitHubRemoteUrl(remoteUrl: string | undefined): ProjectProviderIdentity | null {
   const trimmed = remoteUrl?.trim()
   if (!trimmed) {
