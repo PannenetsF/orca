@@ -22571,6 +22571,7 @@ export class OrcaRuntimeService {
       (pty ? getLatestPtyTitle(pty) : null) ?? tab.title,
       ownerAgent
     )
+    const providerSession = this.getProviderSessionForMobileTab(paneKey)
     // Why: OSC 9999 hook payload carries real state/prompt/agent; without preferring it, hook-only transitions never surfaced (#7970).
     if (retained) {
       return {
@@ -22586,7 +22587,8 @@ export class OrcaRuntimeService {
               ? { worktreeId: pty?.worktreeId ?? retained.worktreeId }
               : {}),
             tabId: tab.parentTabId,
-            terminalTitle
+            terminalTitle,
+            ...(providerSession ? { providerSession } : {})
           },
           ownerAgent
         )
@@ -22611,9 +22613,24 @@ export class OrcaRuntimeService {
         worktreeId: pty!.worktreeId,
         tabId: tab.parentTabId,
         terminalTitle,
-        stateHistory: []
+        stateHistory: [],
+        ...(providerSession ? { providerSession } : {})
       }
     }
+  }
+
+  /** The agent conversation id + transcript path this runtime's own hook server
+   *  captured for a pane. The OSC-9999 retained rows and PTY fallback that back
+   *  buildPtyMobileAgentStatus carry no providerSession (ParsedAgentStatusPayload
+   *  lacks it), so a paired client (web or desktop-on-runtime) resolved
+   *  sessionId=null and native chat never read the transcript. */
+  private getProviderSessionForMobileTab(paneKey: string): AgentStatusEntry['providerSession'] {
+    for (const entry of this.getAgentStatusSnapshotFn?.() ?? []) {
+      if (entry.paneKey === paneKey && entry.providerSession?.id) {
+        return entry.providerSession
+      }
+    }
+    return undefined
   }
 
   /** Retained OSC 9999 hook row for this mobile tab if still fresh; looked up by pane identity, then PTY ownership (legacy `pane:N` ids can drift). */

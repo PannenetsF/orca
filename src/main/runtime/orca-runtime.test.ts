@@ -14611,6 +14611,65 @@ describe('OrcaRuntimeService', () => {
     unsubscribe()
   })
 
+  // A runtime Orca Server ships agent status via the mobile-session-tabs snapshot, whose OSC-9999 retained rows carry no providerSession. Without threading it from the hook snapshot, a paired client resolves sessionId=null and native chat opens permanently empty.
+  it('carries providerSession from the hook snapshot into headless mobile agent status', async () => {
+    const providerSession = {
+      key: 'session_id' as const,
+      id: 'conversation-xyz',
+      transcriptPath: '/home/dev/.claude/projects/demo/conversation-xyz.jsonl'
+    }
+    const paneKey = makePaneKey('provider-tab', HEADLESS_LEAF_ID)
+    const spawn = vi.fn().mockResolvedValue({ id: 'provider-pty' })
+    const runtime = new OrcaRuntimeService(store, undefined, {
+      getAgentStatusSnapshot: () => [
+        {
+          paneKey,
+          state: 'working',
+          prompt: '',
+          agentType: 'claude',
+          connectionId: null,
+          receivedAt: Date.now(),
+          stateStartedAt: Date.now(),
+          tabId: 'provider-tab',
+          worktreeId: TEST_WORKTREE_ID,
+          providerSession
+        }
+      ]
+    })
+    runtime.setPtyController({
+      spawn,
+      write: () => true,
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+    const events: RuntimeMobileSessionTabsResult[] = []
+    const unsubscribe = runtime.onMobileSessionTabsChanged((snapshot) => events.push(snapshot))
+
+    await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'provider-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    events.length = 0
+
+    runtime.onPtyData(
+      'provider-pty',
+      '\x1b]9999;{"state":"working","prompt":"read the code","agentType":"claude"}\x07',
+      100
+    )
+
+    await waitForMobileSessionTabsEvents(events, 1)
+    const tab = events[0]?.tabs[0]
+    expect(tab?.type === 'terminal' && tab.agentStatus).toEqual(
+      expect.objectContaining({
+        agentType: 'claude',
+        paneKey,
+        providerSession
+      })
+    )
+
+    unsubscribe()
+  })
+
   it('does not republish mobile session tabs for repeated identical OSC 9999 payloads', async () => {
     const spawn = vi.fn().mockResolvedValue({ id: 'hook-ping-pty' })
     const runtime = new OrcaRuntimeService(store)
