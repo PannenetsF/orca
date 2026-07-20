@@ -6,6 +6,9 @@ export type HostedReviewProvider =
   | 'bitbucket'
   | 'azure-devops'
   | 'gitea'
+  // User-configured self-hosted server; the concrete API flavor lives in the
+  // custom-git-server config, not in this id, so adding a flavor never grows this.
+  | 'custom'
   | 'unsupported'
 
 export type HostedReviewState = 'open' | 'closed' | 'merged' | 'draft'
@@ -48,6 +51,7 @@ export type HostedReviewForBranchArgs = {
   linkedBitbucketPR?: number | null
   linkedAzureDevOpsPR?: number | null
   linkedGiteaPR?: number | null
+  linkedCustomPR?: number | null
   // The worktree's checked-out HEAD oid (GitHub merged-at-head visibility).
   currentHeadOid?: string | null
 }
@@ -157,6 +161,7 @@ export type HostedReviewCreationEligibilityArgs = {
   linkedBitbucketPR?: number | null
   linkedAzureDevOpsPR?: number | null
   linkedGiteaPR?: number | null
+  linkedCustomPR?: number | null
 }
 
 export type HostedReviewIdentity = {

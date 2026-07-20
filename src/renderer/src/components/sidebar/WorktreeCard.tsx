@@ -1090,6 +1090,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
       case 'gitea':
         void updateWorktreeMeta(worktree.id, { linkedGiteaPR: null })
         return
+      case 'custom':
       case 'unsupported':
       case undefined:
         break

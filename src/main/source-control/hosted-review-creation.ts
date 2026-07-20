@@ -18,6 +18,7 @@ import {
 } from '../../shared/hosted-review-creation-providers'
 import { isAzureDevOpsReviewCreationAuthenticated } from '../azure-devops/pull-request-creation'
 import { isGiteaReviewCreationAuthenticated } from '../gitea/pull-request-creation'
+import { isCustomGitServerAuthenticatedForRepo } from '../custom-git-server/repository-ref'
 import { getEnterpriseGitHubRepoSlug } from '../github/github-enterprise-repository'
 import { acquire, ghExecFileAsync, gitExecFileAsync, release } from '../github/gh-utils'
 import { isNoUpstreamError, normalizeGitErrorMessage } from '../../shared/git-remote-error'
@@ -256,6 +257,16 @@ function reviewCopy(provider: HostedReviewProvider): {
       authInstruction: 'Set ORCA_GITEA_TOKEN'
     }
   }
+  if (provider === 'custom') {
+    // GitLab-compatible custom servers use merge requests; token lives in the
+    // per-server credential store, configured from Settings → Integrations.
+    return {
+      shortLabel: 'MR',
+      reviewLabel: 'merge request',
+      providerName: 'custom git server',
+      authInstruction: 'Add a token for this server in Settings → Integrations'
+    }
+  }
   return {
     shortLabel: 'PR',
     reviewLabel: 'pull request',
@@ -278,6 +289,13 @@ async function isProviderAuthenticated(
   }
   if (provider === 'gitea') {
     return isGiteaReviewCreationAuthenticated()
+  }
+  if (provider === 'custom') {
+    return isCustomGitServerAuthenticatedForRepo(
+      repoPath,
+      connectionId,
+      getHostedReviewLocalGitOptions(options)
+    )
   }
   return isGitHubAuthenticated(repoPath, connectionId, options)
 }
@@ -468,6 +486,7 @@ export async function getHostedReviewCreationEligibility(
       linkedBitbucketPR: args.linkedBitbucketPR ?? null,
       linkedAzureDevOpsPR: args.linkedAzureDevOpsPR ?? null,
       linkedGiteaPR: args.linkedGiteaPR ?? null,
+      linkedCustomPR: args.linkedCustomPR ?? null,
       connectionId: args.connectionId ?? null,
       ...hostedReviewExecutionContext(args)
     })

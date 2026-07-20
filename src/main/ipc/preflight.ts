@@ -4,6 +4,7 @@ import { hydrateShellPath, mergePathSegments } from '../startup/hydrate-shell-pa
 import { getAzureDevOpsAuthStatus } from '../azure-devops/client'
 import { getBitbucketAuthStatus } from '../bitbucket/client'
 import { getGiteaAuthStatus } from '../gitea/client'
+import { getCustomGitServerStatuses } from '../custom-git-server/store'
 import { _resetKnownHostsCache } from '../gitlab/gl-utils'
 import { getActiveMultiplexer } from './ssh'
 import { detectWslCommandsOnPath, type WslPreflightTarget } from './preflight-wsl-agent-detection'
@@ -26,6 +27,7 @@ import {
   KNOWN_TUI_AGENT_DETECTION_COMMANDS,
   resolveDetectedTuiAgentIds
 } from './tui-agent-detection-commands'
+import type { CustomGitServerStatus } from '../../shared/custom-git-server'
 
 export type PreflightStatus = {
   git: { installed: boolean }
@@ -50,6 +52,9 @@ export type PreflightStatus = {
     baseUrl: string | null
     tokenConfigured: boolean
   }
+  // User-configured self-hosted servers. Optional so runtimes that predate the
+  // field keep typechecking; consumers default to an empty list.
+  customGitServers?: CustomGitServerStatus[]
 }
 
 export { detectRemoteWindowsTerminalCapabilities }
@@ -249,13 +254,15 @@ export async function runPreflightCheck(
     detectCommandRuntime('glab', context)
   ])
 
-  const [ghAuthenticated, glabAuthenticated, bitbucket, azureDevOps, gitea] = await Promise.all([
-    ghProbe.installed ? isGhAuthenticated(ghProbe.wslTarget) : Promise.resolve(false),
-    glabProbe.installed ? isGlabAuthenticated(glabProbe.wslTarget) : Promise.resolve(false),
-    getBitbucketAuthStatus(),
-    getAzureDevOpsAuthStatus(),
-    getGiteaAuthStatus()
-  ])
+  const [ghAuthenticated, glabAuthenticated, bitbucket, azureDevOps, gitea, customGitServers] =
+    await Promise.all([
+      ghProbe.installed ? isGhAuthenticated(ghProbe.wslTarget) : Promise.resolve(false),
+      glabProbe.installed ? isGlabAuthenticated(glabProbe.wslTarget) : Promise.resolve(false),
+      getBitbucketAuthStatus(),
+      getAzureDevOpsAuthStatus(),
+      getGiteaAuthStatus(),
+      getCustomGitServerStatuses()
+    ])
 
   const result = {
     git: { installed: gitProbe.installed },
@@ -263,7 +270,8 @@ export async function runPreflightCheck(
     glab: { installed: glabProbe.installed, authenticated: glabAuthenticated },
     bitbucket,
     azureDevOps,
-    gitea
+    gitea,
+    customGitServers
   }
 
   if (cacheable) {
