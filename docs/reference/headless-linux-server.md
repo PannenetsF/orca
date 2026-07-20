@@ -165,6 +165,119 @@ If you later install the desktop CLI from Orca settings, use that CLI for normal
 shell workflows. Keep the AppImage path in systemd so service restarts do not
 depend on an interactive shell profile.
 
+## Upgrade
+
+`orca serve` never updates itself. In headless mode Orca wires up no auto-updater
+at all — the built-in updater only runs in the desktop GUI, and no paired mobile
+or web client can trigger it remotely. Upgrading is always a deliberate step:
+replace the AppImage and restart the service.
+
+Two facts make this safe and predictable:
+
+- **State lives in the service user's home, not next to the binary.** Persisted
+  data is under `/home/orca/.config/` (Orca uses both an `orca` and an `Orca`
+  directory there), fully independent of `/opt/orca/orca-linux.AppImage`.
+  Replacing the binary never touches projects, worktree metadata, terminal
+  history, orchestration state, or paired-device keys — so mobile and web
+  clients reconnect after an upgrade without re-pairing.
+- **New builds migrate old state on load.** `orca-data.json` is upgraded in place
+  by idempotent, field-level migrations when the new version starts, so a forward
+  upgrade needs no manual data step.
+
+Rolling back is the case that needs care — see [Roll back](#roll-back).
+
+### Record the version you deploy
+
+Orca has no headless version command: there is no `--version` flag or `version`
+subcommand, and `orca serve` prints only its endpoint. Track the version by the
+release tag you install, and record it next to the binary so upgrades are
+auditable:
+
+```bash
+echo "v1.4.147" | sudo tee /opt/orca/VERSION
+```
+
+### Upgrade steps
+
+Never download straight onto `/opt/orca/orca-linux.AppImage`. The AppImage is
+FUSE-mounted, so overwriting it in place while the service runs can crash or
+corrupt the live process — and even with the service stopped, a failed or partial
+download would clobber the working binary. Instead download to a temporary name
+on the same filesystem, verify it, then swap it in with an atomic rename.
+
+```bash
+# 1. Stop the server so the state backup is consistent
+sudo systemctl stop orca-serve.service
+
+# 2. Back up the profile and keep the old binary for rollback
+sudo tar czf /opt/orca/orca-backup-$(date +%F-%H%M%S).tgz -C /home/orca .config
+sudo cp -a /opt/orca/orca-linux.AppImage /opt/orca/orca-linux.AppImage.prev
+
+# 3. Download the new build next to the current one (same filesystem)
+sudo curl -fL --retry 3 https://github.com/stablyai/orca/releases/latest/download/orca-linux.AppImage \
+  -o /opt/orca/orca-linux.AppImage.new
+sudo chmod +x /opt/orca/orca-linux.AppImage.new
+sudo chown orca:orca /opt/orca/orca-linux.AppImage.new
+
+# Sanity-check the download before promoting it: this must report an ELF
+# executable. If it reports HTML or an empty file, the download failed — stop here.
+file /opt/orca/orca-linux.AppImage.new
+
+# 4. Atomically replace the binary, then start
+sudo mv -f /opt/orca/orca-linux.AppImage.new /opt/orca/orca-linux.AppImage
+sudo systemctl start orca-serve.service
+```
+
+Backing up the whole `.config` directory (step 2) captures both the `orca` and
+`Orca` directories in one archive, so you do not have to reason about which files
+live where. If you run the managed Xvfb unit, only `orca-serve.service` needs
+restarting — leave `orca-xvfb.service` running.
+
+To pin a specific build instead of tracking the latest release, download from the
+tagged URL in step 3:
+
+```bash
+sudo curl -fL --retry 3 https://github.com/stablyai/orca/releases/download/v1.4.147/orca-linux.AppImage \
+  -o /opt/orca/orca-linux.AppImage.new
+```
+
+### Verify
+
+```bash
+sudo journalctl -u orca-serve.service -f
+```
+
+A healthy start prints `Orca server ready: ws://0.0.0.0:6768` (with your port).
+Confirm a client reconnects before you discard the backup.
+
+### Roll back
+
+A rollback is **not** binary-only safe. Once a newer build has started, it
+rewrites `orca-data.json` in place, and an older build silently drops the newer
+fields it does not recognize (workspace, terminal, and browser session layout in
+particular). The rolling `orca-data.json.bak.*` files are corruption-recovery
+snapshots, not a pre-upgrade copy — the new version overwrites them within hours.
+So to roll back cleanly, restore the backup from step 2 **and** swap the binary
+back:
+
+```bash
+sudo systemctl stop orca-serve.service
+# Find the most recent pre-upgrade backup
+ls -t /opt/orca/orca-backup-*.tgz | head -1
+# Move the current (post-upgrade) profile aside instead of deleting it
+sudo mv /home/orca/.config /home/orca/.config.rollback-$(date +%F-%H%M%S)
+# Restore the backup listed above in place of <stamp>
+sudo tar xzf /opt/orca/orca-backup-<stamp>.tgz -C /home/orca
+sudo chown -R orca:orca /home/orca/.config
+sudo mv -f /opt/orca/orca-linux.AppImage.prev /opt/orca/orca-linux.AppImage
+sudo systemctl start orca-serve.service
+```
+
+Replace `<stamp>` with the timestamp of the archive you created. Restoring the
+backup is required, not optional: swapping only the binary leaves the migrated
+`orca-data.json` in place, so session and workspace state stays broken. Keep the
+pre-upgrade backup until the new version is proven on your host.
+
 ## Troubleshooting
 
 - `dlopen(): error loading libfuse.so.2`: install `libfuse2`.
@@ -178,6 +291,10 @@ depend on an interactive shell profile.
   `orca` user and that `/opt/orca` is readable by that user.
 - Clients cannot connect: make sure `--pairing-address` is an address reachable
   from the client, and make sure firewalls allow the selected `--port`.
+- Service crash-loops right after an upgrade: the promoted binary may be a bad
+  download, or it was overwritten in place. Follow the [Upgrade](#upgrade) steps
+  again — they stop the service, verify the download, replace it atomically, and
+  restart.
 - Diagnosing other missing libraries: extract the AppImage without launching it
   with `./orca-linux.AppImage --appimage-extract`, then run
   `ldd squashfs-root/orca` to list any shared libraries the host is missing.
