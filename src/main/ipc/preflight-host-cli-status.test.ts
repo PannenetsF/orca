@@ -11,6 +11,7 @@ const {
   getBitbucketAuthStatusMock,
   getAzureDevOpsAuthStatusMock,
   getGiteaAuthStatusMock,
+  getCustomGitServerStatusesMock,
   resolveCliCommandsMock,
   isCommandOnLocalPathMock,
   mergePersistedWindowsPathAsyncMock,
@@ -26,6 +27,7 @@ const {
   getBitbucketAuthStatusMock: vi.fn(),
   getAzureDevOpsAuthStatusMock: vi.fn(),
   getGiteaAuthStatusMock: vi.fn(),
+  getCustomGitServerStatusesMock: vi.fn(),
   resolveCliCommandsMock: vi.fn(),
   isCommandOnLocalPathMock: vi.fn(),
   mergePersistedWindowsPathAsyncMock: vi.fn(),
@@ -88,6 +90,10 @@ vi.mock('../gitea/client', () => ({
   getGiteaAuthStatus: getGiteaAuthStatusMock
 }))
 
+vi.mock('../custom-git-server/store', () => ({
+  getCustomGitServerStatuses: getCustomGitServerStatusesMock
+}))
+
 import { registerPreflightHandlers, runPreflightCheck } from './preflight'
 import {
   defaultAzureDevOpsStatus,
@@ -113,6 +119,7 @@ describe('preflight', () => {
         getBitbucketAuthStatusMock,
         getAzureDevOpsAuthStatusMock,
         getGiteaAuthStatusMock,
+        getCustomGitServerStatusesMock,
         resolveCliCommandsMock,
         isCommandOnLocalPathMock,
         mergePersistedWindowsPathAsyncMock,
@@ -148,7 +155,8 @@ describe('preflight', () => {
       glab: { installed: true, authenticated: true },
       bitbucket: defaultBitbucketStatus,
       azureDevOps: defaultAzureDevOpsStatus,
-      gitea: defaultGiteaStatus
+      gitea: defaultGiteaStatus,
+      customGitServers: []
     })
     expect(execFileAsyncMock).toHaveBeenNthCalledWith(4, 'gh', ['auth', 'status'], {
       encoding: 'utf-8',
@@ -502,7 +510,8 @@ describe('preflight', () => {
       glab: { installed: true, authenticated: true },
       bitbucket: defaultBitbucketStatus,
       azureDevOps: defaultAzureDevOpsStatus,
-      gitea: defaultGiteaStatus
+      gitea: defaultGiteaStatus,
+      customGitServers: []
     })
   })
 
@@ -530,7 +539,8 @@ describe('preflight', () => {
       glab: { installed: true, authenticated: true },
       bitbucket: defaultBitbucketStatus,
       azureDevOps: defaultAzureDevOpsStatus,
-      gitea: defaultGiteaStatus
+      gitea: defaultGiteaStatus,
+      customGitServers: []
     })
     expect(refreshedStatus).toEqual({
       git: { installed: true },
@@ -538,7 +548,8 @@ describe('preflight', () => {
       glab: { installed: true, authenticated: true },
       bitbucket: defaultBitbucketStatus,
       azureDevOps: defaultAzureDevOpsStatus,
-      gitea: defaultGiteaStatus
+      gitea: defaultGiteaStatus,
+      customGitServers: []
     })
   })
 

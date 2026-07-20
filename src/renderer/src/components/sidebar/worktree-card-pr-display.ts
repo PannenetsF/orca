@@ -60,6 +60,9 @@ function getLinkedReviewNumber(
       return links.linkedAzureDevOpsPR
     case 'gitea':
       return links.linkedGiteaPR
+    // Custom-server reviews are discovered by branch, not persisted by number.
+    case 'custom':
+      return null
   }
 }
 
@@ -68,7 +71,7 @@ function makeLinkedReviewFallback(
   number: number,
   review: HostedReviewInfo | null | undefined
 ): WorktreeCardPrDisplay {
-  const label = provider === 'gitlab' ? 'MR' : 'PR'
+  const label = provider === 'gitlab' || provider === 'custom' ? 'MR' : 'PR'
   return {
     provider,
     number,
