@@ -108,12 +108,15 @@ function getFile(): CustomGitServerFile {
 /** Persist the full server list to disk (0600) and refresh the cache. */
 export function writeCustomGitServerConfig(servers: CustomGitServer[]): void {
   ensureOrcaDir()
-  cachedFile = { version: 1, servers }
-  fileLoaded = true
-  writeFileSync(getServerFilePath(), JSON.stringify(cachedFile, null, 2), {
+  const nextFile: CustomGitServerFile = { version: 1, servers }
+  writeFileSync(getServerFilePath(), JSON.stringify(nextFile, null, 2), {
     encoding: 'utf-8',
     mode: 0o600
   })
+  // Why: adopt the new state into the cache only after the write succeeds, so a
+  // failed write leaves the cache consistent with what's actually on disk.
+  cachedFile = nextFile
+  fileLoaded = true
 }
 
 /**

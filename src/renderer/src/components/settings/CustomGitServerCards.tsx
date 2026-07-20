@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -93,14 +94,20 @@ function CustomGitServerForm(props: {
   const handleTest = async (): Promise<void> => {
     setBusy('test')
     setTestResult(null)
-    const result = await testCustomGitServer({ ...form, token: form.token.trim() })
-    if (!mountedRef.current) {
-      return
+    // Why: a rejected IPC call must still clear the busy state and report an error.
+    let next: TestResult
+    try {
+      const result = await testCustomGitServer({ ...form, token: form.token.trim() })
+      next = result.ok
+        ? { state: 'ok', account: result.account }
+        : { state: 'error', error: result.error }
+    } catch (error) {
+      next = { state: 'error', error: error instanceof Error ? error.message : String(error) }
     }
-    setTestResult(
-      result.ok ? { state: 'ok', account: result.account } : { state: 'error', error: result.error }
-    )
-    setBusy(null)
+    if (mountedRef.current) {
+      setTestResult(next)
+      setBusy(null)
+    }
   }
 
   const handleSave = async (): Promise<void> => {
@@ -265,6 +272,7 @@ function CustomGitServerRow(props: {
   onEdit: () => void
 }): React.JSX.Element {
   const removeCustomGitServer = useAppStore((s) => s.removeCustomGitServer)
+  const mountedRef = useMountedRef()
   const [removing, setRemoving] = useState(false)
   const connected = props.server.authenticated
   const statusLabel = connected
@@ -276,7 +284,18 @@ function CustomGitServerRow(props: {
 
   const handleRemove = async (): Promise<void> => {
     setRemoving(true)
-    await removeCustomGitServer(props.server.id)
+    try {
+      await removeCustomGitServer(props.server.id)
+    } catch (error) {
+      // Why: reset on failure so the Remove button isn't stuck if the IPC rejects.
+      if (mountedRef.current) {
+        setRemoving(false)
+      }
+      toast.error(
+        translate('settings.customGitServer.error.remove', 'Failed to remove server'),
+        { description: error instanceof Error ? error.message : String(error) }
+      )
+    }
   }
 
   return (
