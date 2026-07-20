@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import type { Worktree } from '../../../shared/types'
 import { isWindowsAbsolutePathLike } from '../../../shared/cross-platform-path'
 import { createBrowserUuid } from '@/lib/browser-uuid'
+import { isWebClientLocation } from '@/lib/web-client-location'
 import { cancelRuntimeFileList, listRuntimeFiles } from '@/runtime/runtime-file-client'
 import { useAppStore } from '@/store'
 import { useWorktreesForRepo } from '@/store/selectors'
@@ -135,7 +136,7 @@ export function useRuntimeFileListForWorktree({
     }))
   )
   const operationOwner = useMemo(
-    () => getFileExplorerOperationOwnerFromState(operationOwnerState, worktreeId),
+    () => getFileExplorerOperationOwnerFromState(operationOwnerState, worktreeId, isWebClientLocation()),
     [operationOwnerState, worktreeId]
   )
   const operationOwnerKey = JSON.stringify(operationOwner)
