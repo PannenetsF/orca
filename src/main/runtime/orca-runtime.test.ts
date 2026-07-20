@@ -6222,6 +6222,59 @@ describe('OrcaRuntimeService', () => {
     }
   })
 
+  it('rolls back a freshly imported repo when it cannot be aligned with the project', async () => {
+    // Why: a non-GitHub project id whose identity cannot be reconstructed, paired
+    // with a folder that does not match, must fail atomically on the runtime host
+    // too — no orphaned repo left behind (parity with the local IPC handler).
+    const tempRoot = await mkdtemp(join(tmpdir(), 'orca-runtime-project-rollback-'))
+    const repos: Record<string, unknown>[] = []
+    getRepoUpstreamMock.mockResolvedValue(null)
+    const runtimeStore = {
+      ...store,
+      getRepos: () => [...repos] as never,
+      addRepo: (repo: Record<string, unknown>) => {
+        repos.push(repo)
+      },
+      getRepo: (id: string) => repos.find((repo) => repo.id === id) as never,
+      updateRepo: (id: string, updates: Record<string, unknown>) => {
+        const index = repos.findIndex((repo) => repo.id === id)
+        if (index === -1) {
+          return null
+        }
+        repos[index] = { ...repos[index], ...updates }
+        return repos[index] as never
+      },
+      removeProject: (id: string) => {
+        const index = repos.findIndex((repo) => repo.id === id)
+        if (index !== -1) {
+          repos.splice(index, 1)
+        }
+      },
+      getProjects: () => projectHostSetupProjectionFromRepos(repos as never).projects as never,
+      getProjectHostSetups: () =>
+        projectHostSetupProjectionFromRepos(repos as never).setups as never
+    }
+    const runtime = new OrcaRuntimeService(runtimeStore as never)
+
+    try {
+      execFileSync('git', ['init'], { cwd: tempRoot, stdio: 'ignore' })
+      await expect(
+        runtime.setupProjectExistingFolder({
+          projectId: 'git:gitlab.example/team/app',
+          hostId: 'runtime:env-1',
+          path: tempRoot,
+          kind: 'git',
+          setupMethod: 'imported-existing-folder'
+        })
+      ).rejects.toThrow('Imported folder does not match the selected project identity.')
+
+      // The imported repo was rolled back, not left orphaned on the runtime host.
+      expect(repos).toHaveLength(0)
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
   it('keeps existing-folder imports split by runtime host on the same normalized path', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'orca-runtime-project-host-'))
     const repos: Record<string, unknown>[] = []
