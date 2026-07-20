@@ -20,6 +20,12 @@ import type {
   LocalLogTailWatchArgs
 } from '../shared/local-log-tail-types'
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
+import type {
+  CustomGitServer,
+  CustomGitServerDraft,
+  CustomGitServerStatus,
+  CustomGitServerTestResult
+} from '../shared/custom-git-server'
 import type { AppIdentity } from '../shared/app-identity'
 import type {
   WriteTerminalRenderDesyncEvidenceArgs,
@@ -632,6 +638,9 @@ export type PreflightStatus = {
     baseUrl: string | null
     tokenConfigured: boolean
   }
+  /** User-configured self-hosted servers. Optional for payload back-compat;
+   *  consumers default to an empty list. */
+  customGitServers?: CustomGitServerStatus[]
 }
 
 export type RefreshAgentsResult = {
@@ -2248,6 +2257,13 @@ export type PreloadApi = {
     }) => Promise<void>
   }
   preflight: PreflightApi
+  customGitServer: {
+    list: () => Promise<CustomGitServer[]>
+    save: (draft: CustomGitServerDraft & { id?: string }) => Promise<CustomGitServer>
+    remove: (args: { id: string }) => Promise<void>
+    test: (draft: CustomGitServerDraft & { token: string }) => Promise<CustomGitServerTestResult>
+    status: () => Promise<CustomGitServerStatus[]>
+  }
   notifications: {
     dispatch: (args: NotificationDispatchRequest) => Promise<NotificationDispatchResult>
     dismiss: (ids: string[]) => Promise<NotificationDismissResult>

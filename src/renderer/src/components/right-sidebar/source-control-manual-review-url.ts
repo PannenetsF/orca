@@ -169,6 +169,8 @@ export function buildSourceControlManualReviewUrl(input: ManualReviewUrlInput): 
         githubHeadRef(baseRepo, headRepo, headBranch)
       )}?expand=1`
     case 'gitlab':
+    // Custom servers are GitLab-compatible in v1 — same new-MR URL shape.
+    case 'custom':
       return appendQuery(`${baseRepo.webBaseUrl}/-/merge_requests/new`, {
         'merge_request[source_branch]': headBranch,
         'merge_request[target_branch]': baseBranch
