@@ -3555,7 +3555,17 @@ export class OrcaRuntimeService {
       worktreeId !== undefined
         ? ([[worktreeId, session.tabsByWorktree[worktreeId] ?? []]] as const)
         : Object.entries(session.tabsByWorktree ?? {})
+    // Why: workspaceSession keys are `${repoId}::${path}` and are not pruned when
+    // a repo disappears from this client's view (e.g. removed on another client,
+    // or a stale browser-persisted session). Hydrating such a key would surface a
+    // phantom "unknown"/duplicate workspace with no live repo behind it. Only
+    // hydrate sessions whose repo still exists; leave unparseable keys alone.
+    const liveRepoIds = new Set((this.store?.getRepos?.() ?? []).map((repo) => repo.id))
     for (const [entryWorktreeId, persistedTabs] of entries) {
+      const ownerRepoId = splitWorktreeIdForFilesystem(entryWorktreeId)?.repoId
+      if (ownerRepoId && !liveRepoIds.has(ownerRepoId)) {
+        continue
+      }
       const existing = this.mobileSessionTabsByWorktree.get(entryWorktreeId)
       if (
         existing &&
