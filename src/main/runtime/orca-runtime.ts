@@ -194,7 +194,8 @@ import {
 } from '../../shared/worktree-id'
 import {
   getProjectHostSetupForRepo,
-  getProjectHostSetupWorktreeMeta
+  getProjectHostSetupWorktreeMeta,
+  parseProjectProviderIdentity
 } from '../../shared/project-host-setup-projection'
 import { parsePtySessionId } from '../../shared/pty-session-id-format'
 import { clampLinearIssueListLimit } from '../../shared/linear-issue-read-limits'
@@ -12757,42 +12758,63 @@ export class OrcaRuntimeService {
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
+    const knownRepoIds = new Set(this.listRepos().map((entry) => entry.id))
     let repo = await this.addRepo(args.path, args.kind === 'folder' ? 'folder' : 'git', args.hostId)
-    let setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
-    if (setup.projectId !== args.projectId) {
-      const existingProject = this.listProjects().find((project) => project.id === args.projectId)
-      if (
-        !existingProject?.providerIdentity ||
-        existingProject.providerIdentity.provider !== 'github'
-      ) {
-        throw new Error('Imported folder does not match the selected project identity.')
-      }
-      const updated = this.store.updateRepo(repo.id, {
-        upstream: {
-          owner: existingProject.providerIdentity.owner,
-          repo: existingProject.providerIdentity.repo
+    // Why: keep runtime setup atomic — a freshly imported repo must not linger
+    // as an orphan on the runtime host when it can't be linked to the project.
+    const repoWasCreated = !knownRepoIds.has(repo.id)
+    try {
+      let setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
+      if (setup.projectId !== args.projectId) {
+        // Why: the project can live only on another host (e.g. the desktop-local
+        // store), so fall back to the identity encoded in the project id when this
+        // runtime has no project record to read `providerIdentity` from.
+        const existingProject = this.listProjects().find(
+          (project) => project.id === args.projectId
+        )
+        const identity =
+          existingProject?.providerIdentity ?? parseProjectProviderIdentity(args.projectId)
+        if (!identity || identity.provider !== 'github') {
+          throw new Error('Imported folder does not match the selected project identity.')
         }
-      })
+        const updated = this.store.updateRepo(repo.id, {
+          upstream: {
+            owner: identity.owner,
+            repo: identity.repo
+          }
+        })
+        if (!updated) {
+          throw new Error(`Project setup repo disappeared before it could be linked: ${repo.id}`)
+        }
+        repo = updated
+        setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
+      }
+      const setupMethod = args.setupMethod ?? 'imported-existing-folder'
+      const updated = this.store.updateRepo(repo.id, { projectHostSetupMethod: setupMethod })
       if (!updated) {
-        throw new Error(`Project setup repo disappeared before it could be linked: ${repo.id}`)
+        throw new Error(
+          `Project setup repo disappeared before setup metadata could be linked: ${repo.id}`
+        )
       }
       repo = updated
       setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
+      const project = this.listProjects().find((entry) => entry.id === setup.projectId)
+      if (!project) {
+        throw new Error(`Project setup was created without a project record: ${setup.projectId}`)
+      }
+      return { project, setup, repo }
+    } catch (err) {
+      if (repoWasCreated) {
+        // Why: mirror the canonical removeProject cleanup so the rolled-back repo
+        // leaves no stale worktree-scan / authorized-roots cache entries behind.
+        this.store.removeProject?.(repo.id)
+        this.invalidateResolvedWorktreeCache()
+        this.invalidateWorktreeScanCacheForRepo(repo.id)
+        invalidateAuthorizedRootsCache()
+        this.notifyReposChanged()
+      }
+      throw err
     }
-    const setupMethod = args.setupMethod ?? 'imported-existing-folder'
-    const updated = this.store.updateRepo(repo.id, { projectHostSetupMethod: setupMethod })
-    if (!updated) {
-      throw new Error(
-        `Project setup repo disappeared before setup metadata could be linked: ${repo.id}`
-      )
-    }
-    repo = updated
-    setup = getProjectHostSetupForRepo(this.listProjectHostSetups(), repo)
-    const project = this.listProjects().find((entry) => entry.id === setup.projectId)
-    if (!project) {
-      throw new Error(`Project setup was created without a project record: ${setup.projectId}`)
-    }
-    return { project, setup, repo }
   }
 
   async setupProjectClone(args: ProjectHostSetupCloneArgs): Promise<ProjectHostSetupResult> {

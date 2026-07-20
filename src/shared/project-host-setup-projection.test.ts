@@ -3,7 +3,8 @@ import {
   projectHostSetupProjectionFromRepos,
   getProjectHostSetupsForProject,
   getProjectHostSetupWorktreeMeta,
-  isGitHubBackedRepo
+  isGitHubBackedRepo,
+  parseProjectProviderIdentity
 } from './project-host-setup-projection'
 import type { Repo } from './types'
 
@@ -385,5 +386,36 @@ describe('isGitHubBackedRepo', () => {
 
   it('is false for a plain local repo with no provider signal', () => {
     expect(isGitHubBackedRepo(repo({ id: 'r', path: '/r', displayName: 'r' }))).toBe(false)
+  })
+})
+
+describe('parseProjectProviderIdentity', () => {
+  it('round-trips a GitHub identity key produced by the projection', () => {
+    const target = repo({
+      id: 'r',
+      path: '/r',
+      displayName: 'r',
+      upstream: { owner: 'pytorch', repo: 'pytorch' }
+    })
+    const projectId = projectHostSetupProjectionFromRepos([target]).projects[0]!.id
+    expect(projectId).toBe('github:pytorch/pytorch')
+    expect(parseProjectProviderIdentity(projectId)).toEqual({
+      provider: 'github',
+      owner: 'pytorch',
+      repo: 'pytorch'
+    })
+  })
+
+  it('returns null for non-GitHub project ids', () => {
+    expect(parseProjectProviderIdentity('git:git.company.test/team/app')).toBeNull()
+    expect(parseProjectProviderIdentity('repo:some-uuid')).toBeNull()
+  })
+
+  it('returns null for malformed GitHub ids (missing owner or repo)', () => {
+    expect(parseProjectProviderIdentity('github:')).toBeNull()
+    expect(parseProjectProviderIdentity('github:owner')).toBeNull()
+    expect(parseProjectProviderIdentity('github:owner/')).toBeNull()
+    expect(parseProjectProviderIdentity('github:/repo')).toBeNull()
+    expect(parseProjectProviderIdentity('github:owner/repo/extra')).toBeNull()
   })
 })
