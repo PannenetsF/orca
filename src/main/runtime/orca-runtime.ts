@@ -12639,8 +12639,12 @@ export class OrcaRuntimeService {
       return { project, setup, repo }
     } catch (err) {
       if (repoWasCreated) {
+        // Why: mirror the canonical removeProject cleanup so the rolled-back repo
+        // leaves no stale worktree-scan / authorized-roots cache entries behind.
         this.store.removeProject?.(repo.id)
         this.invalidateResolvedWorktreeCache()
+        this.invalidateWorktreeScanCacheForRepo(repo.id)
+        invalidateAuthorizedRootsCache()
         this.notifyReposChanged()
       }
       throw err
