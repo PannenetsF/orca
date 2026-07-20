@@ -96,6 +96,9 @@
         "remove": "Remove",
         "save": "Save",
         "test": "Test connection"
+      },
+      "error": {
+        "remove": "Failed to remove server"
       }
     }
   },

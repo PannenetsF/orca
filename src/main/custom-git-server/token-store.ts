@@ -80,13 +80,18 @@ export function saveCustomGitServerToken(serverId: string, token: string): void 
 }
 
 export function deleteCustomGitServerToken(serverId: string): void {
-  cachedTokens.delete(serverId)
-  credentialErrors.delete(serverId)
   try {
     unlinkSync(getTokenPath(serverId))
-  } catch {
-    // Token may not exist — safe to ignore.
+  } catch (error) {
+    // Why: only a missing file is safe to ignore. Surface any other failure
+    // (locked file, permissions) instead of leaving an orphaned token on disk
+    // while the caller believes it was removed.
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+      throw error
+    }
   }
+  cachedTokens.delete(serverId)
+  credentialErrors.delete(serverId)
 }
 
 export function hasStoredCustomGitServerToken(serverId: string): boolean {
