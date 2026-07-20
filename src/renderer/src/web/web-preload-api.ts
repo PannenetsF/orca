@@ -2776,9 +2776,23 @@ function createRateLimitsApi(): NonNullable<Partial<PreloadApi>['rateLimits']> {
     inactiveClaudeAccounts: [],
     inactiveCodexAccounts: []
   }
+  // Why: the paired runtime bundles usage into its accounts snapshot —
+  // accounts.list / accounts.subscribe carry `rateLimits` (verified headless),
+  // and accounts.list forces a refresh server-side. Routing the read path there
+  // gives a web client the same usage meters as desktop. Account *mutation*
+  // (per-target refresh, inactive-account fetches, reset-credit redemption) stays
+  // desktop-only because it drives local `claude login` / `codex login` flows.
+  const readRateLimits = async (): Promise<RateLimitState> => {
+    try {
+      const snapshot = await callRuntimeResult<{ rateLimits?: RateLimitState }>('accounts.list')
+      return snapshot.rateLimits ?? empty
+    } catch {
+      return empty
+    }
+  }
   return {
-    get: () => Promise.resolve(empty),
-    refresh: () => Promise.resolve(empty),
+    get: readRateLimits,
+    refresh: readRateLimits,
     refreshCodexForTarget: () => Promise.resolve(empty),
     // Why: web clients don't own local Codex auth; report the safe no-credit outcome since redemption is desktop-only.
     consumeCodexResetCredit: () => Promise.resolve({ outcome: 'noCredit', state: empty }),
@@ -2786,9 +2800,44 @@ function createRateLimitsApi(): NonNullable<Partial<PreloadApi>['rateLimits']> {
     setPollingInterval: () => Promise.resolve(),
     fetchInactiveClaudeAccounts: () => Promise.resolve(),
     fetchInactiveCodexAccounts: () => Promise.resolve(),
-    refreshMiniMax: () => Promise.resolve(empty),
-    refreshGrok: () => Promise.resolve(empty),
-    onUpdate: () => noopUnsubscribe
+    refreshMiniMax: readRateLimits,
+    refreshGrok: readRateLimits,
+    onUpdate: (callback) => {
+      // Why: mirror desktop's `rateLimits:update` push by riding the accounts
+      // subscription, which re-emits a snapshot whenever the server's rate-limit
+      // poll completes or an account switches. No active environment → no-op.
+      const environment = requireActiveEnvironmentOrNull()
+      if (!environment) {
+        return noopUnsubscribe
+      }
+      let handle: { unsubscribe: () => void } | null = null
+      let cancelled = false
+      void getClientForEnvironment(environment)
+        .subscribe('accounts.subscribe', null, {
+          onResponse: (response) => {
+            if (cancelled || !response.ok) {
+              return
+            }
+            const frame = response.result as { snapshot?: { rateLimits?: RateLimitState } }
+            const next = frame?.snapshot?.rateLimits
+            if (next) {
+              callback(next)
+            }
+          }
+        })
+        .then((subscription) => {
+          if (cancelled) {
+            subscription.unsubscribe()
+            return
+          }
+          handle = subscription
+        })
+        .catch(() => {})
+      return () => {
+        cancelled = true
+        handle?.unsubscribe()
+      }
+    }
   }
 }
 

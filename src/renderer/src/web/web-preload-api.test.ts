@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PreloadApi } from '../../../preload/api-types'
 import type { FeatureInteractionState } from '../../../shared/feature-interactions'
 import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+import type { RateLimitState } from '../../../shared/rate-limit-types'
 import type { TaskSourceContext } from '../../../shared/task-source-context'
 
 const TEST_COMMIT_OID = '0123456789abcdef0123456789abcdef01234567'
@@ -3430,5 +3431,96 @@ describe('web GitLab preload API', () => {
         }
       }
     ])
+  })
+})
+
+describe('web rate-limits preload API', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('routes rateLimits.get to the paired runtime accounts snapshot', async () => {
+    const runtimeCalls: { method: string; params: unknown }[] = []
+    const claudeUsage = { status: 'ok', percentUsed: 42 }
+    vi.doMock('./web-runtime-client', () => ({
+      WebRuntimeClient: class {
+        call(method: string, params?: unknown): Promise<RuntimeRpcResponse<unknown>> {
+          runtimeCalls.push({ method, params })
+          return Promise.resolve({
+            id: `call-${runtimeCalls.length}`,
+            ok: true,
+            result: { claude: [], codex: [], rateLimits: { claude: claudeUsage, codex: null } },
+            _meta: { runtimeId: 'runtime-1' }
+          })
+        }
+
+        close(): void {}
+      }
+    }))
+
+    const globals = installBrowserGlobals('Linux')
+    writeStoredRuntimeEnvironment(globals.storage)
+    const { installWebPreloadApi } = await import('./web-preload-api')
+    installWebPreloadApi()
+
+    const state = await globals.window.api.rateLimits.get()
+
+    // Why: usage meters must reach the web client via the accounts snapshot the
+    // headless runtime already serves, not the empty desktop-only stub.
+    expect(runtimeCalls).toEqual([{ method: 'accounts.list', params: undefined }])
+    expect(state.claude).toEqual(claudeUsage)
+  })
+
+  it('forwards accounts subscription snapshots through rateLimits.onUpdate', async () => {
+    const captured: { onResponse?: (response: RuntimeRpcResponse<unknown>) => void } = {}
+    const unsubscribe = vi.fn()
+    vi.doMock('./web-runtime-client', () => ({
+      WebRuntimeClient: class {
+        call(): Promise<RuntimeRpcResponse<unknown>> {
+          return Promise.resolve({ id: 'c', ok: true, result: {}, _meta: { runtimeId: 'r' } })
+        }
+
+        subscribe(
+          method: string,
+          _params: unknown,
+          callbacks: { onResponse: (response: RuntimeRpcResponse<unknown>) => void }
+        ): Promise<{ unsubscribe: () => void }> {
+          expect(method).toBe('accounts.subscribe')
+          captured.onResponse = callbacks.onResponse
+          return Promise.resolve({ unsubscribe })
+        }
+
+        close(): void {}
+      }
+    }))
+
+    const globals = installBrowserGlobals('Linux')
+    writeStoredRuntimeEnvironment(globals.storage)
+    const { installWebPreloadApi } = await import('./web-preload-api')
+    installWebPreloadApi()
+
+    const received: RateLimitState[] = []
+    const off = globals.window.api.rateLimits.onUpdate((state) => received.push(state))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(captured.onResponse).toBeTypeOf('function')
+    const grok = { status: 'ok', percentUsed: 7 }
+    captured.onResponse?.({
+      id: 's',
+      ok: true,
+      result: { type: 'snapshot', snapshot: { claude: [], codex: [], rateLimits: { grok } } },
+      _meta: { runtimeId: 'r' }
+    })
+
+    expect(received).toHaveLength(1)
+    expect(received[0]?.grok).toEqual(grok)
+
+    off()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(unsubscribe).toHaveBeenCalled()
   })
 })
