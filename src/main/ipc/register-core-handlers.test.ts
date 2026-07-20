@@ -352,6 +352,10 @@ vi.mock('./gitlab', () => ({
   registerGitLabHandlers: registerGitLabHandlersMock
 }))
 
+vi.mock('./custom-git-server', () => ({
+  registerCustomGitServerHandlers: vi.fn()
+}))
+
 vi.mock('./hosted-review', () => ({
   registerHostedReviewHandlers: registerHostedReviewHandlersMock
 }))
