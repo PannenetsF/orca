@@ -106,8 +106,12 @@ describe('useAddRepoLocalFolderFlow', () => {
 
     expect(pickFolders).toHaveBeenCalledTimes(1)
     expect(addRepoPath).toHaveBeenCalledTimes(2)
-    expect(addRepoPath).toHaveBeenNthCalledWith(1, '/projects/alpha')
-    expect(addRepoPath).toHaveBeenNthCalledWith(2, '/projects/beta')
+    expect(addRepoPath).toHaveBeenNthCalledWith(1, '/projects/alpha', 'git', {
+      runtimeEnvironmentId: null
+    })
+    expect(addRepoPath).toHaveBeenNthCalledWith(2, '/projects/beta', 'git', {
+      runtimeEnvironmentId: null
+    })
     expect(fetchWorktrees).toHaveBeenCalledWith('alpha', { requireAuthoritative: true })
     expect(fetchWorktrees).toHaveBeenCalledWith('beta', { requireAuthoritative: true })
     expect(onGitRepoReady).toHaveBeenCalledTimes(1)
@@ -146,7 +150,9 @@ describe('useAddRepoLocalFolderFlow', () => {
 
     expect(showNestedRepoReview).not.toHaveBeenCalled()
     expect(addRepoPath).toHaveBeenCalledTimes(1)
-    expect(addRepoPath).toHaveBeenCalledWith('/projects/later')
+    expect(addRepoPath).toHaveBeenCalledWith('/projects/later', 'git', {
+      runtimeEnvironmentId: null
+    })
     expect(scanNestedRepos).toHaveBeenCalledTimes(2)
     expect(onGitRepoReady).toHaveBeenCalledWith('later', 'local_folder_picker')
   })
@@ -181,7 +187,41 @@ describe('useAddRepoLocalFolderFlow', () => {
 
     expect(showNestedRepoReview).not.toHaveBeenCalled()
     expect(addRepoPath).toHaveBeenCalledTimes(1)
-    expect(addRepoPath).toHaveBeenCalledWith('/projects/git')
+    expect(addRepoPath).toHaveBeenCalledWith('/projects/git', 'git', {
+      runtimeEnvironmentId: null
+    })
     expect(onGitRepoReady).toHaveBeenCalledWith('git', 'local_folder_picker')
+  })
+
+  it('forces local routing so a stale global active-runtime cannot capture the add', async () => {
+    // Why: the host selector can display "Local" (selectedRuntimeEnvironmentId=null,
+    // so the guard passes) while the global active-runtime still points at an
+    // unavailable runtime. Native-picked paths are always local, so the add must
+    // route local regardless — never inherit the ambiguous global runtime.
+    pickFolders.mockResolvedValue(['/Users/me/orca'])
+    const { useAddRepoLocalFolderFlow } = await import('./useAddRepoLocalFolderFlow')
+
+    const { handleBrowse } = useAddRepoLocalFolderFlow({
+      isOpen: true,
+      droppedLocalPath: '',
+      activeRuntimeEnvironmentId: null,
+      addRepoPath,
+      closeModal,
+      fetchWorktrees,
+      scanNestedRepos,
+      setActiveNestedScanId,
+      setNestedScanInProgress,
+      showNestedRepoReview,
+      onGitRepoReady,
+      setIsAdding,
+      setAddProjectBusyLabel
+    })
+
+    await handleBrowse()
+
+    expect(addRepoPath).toHaveBeenCalledTimes(1)
+    expect(addRepoPath).toHaveBeenCalledWith('/Users/me/orca', 'git', {
+      runtimeEnvironmentId: null
+    })
   })
 })

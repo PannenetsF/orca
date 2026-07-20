@@ -37,6 +37,10 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
   const [previousOpen, setPreviousOpen] = useState(isOpen)
   const folderPath = typeof modalData.folderPath === 'string' ? modalData.folderPath : ''
   const connectionId = typeof modalData.connectionId === 'string' ? modalData.connectionId : ''
+  // Why: route the add to the active repo's host, not the globally-active runtime.
+  // Absent/non-string means local (null); a string is the owning runtime.
+  const runtimeEnvironmentId =
+    typeof modalData.runtimeEnvironmentId === 'string' ? modalData.runtimeEnvironmentId : null
 
   if (isOpen !== previousOpen) {
     setPreviousOpen(isOpen)
@@ -53,9 +57,10 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
     closeModal()
     openModal('confirm-non-git-folder', {
       folderPath,
-      ...(connectionId ? { connectionId } : {})
+      ...(connectionId ? { connectionId } : {}),
+      ...(runtimeEnvironmentId ? { runtimeEnvironmentId } : {})
     })
-  }, [closeModal, connectionId, folderPath, openModal])
+  }, [closeModal, connectionId, folderPath, openModal, runtimeEnvironmentId])
 
   const handleConfirm = useCallback(async () => {
     if (!folderPath || isAdding) {
@@ -96,7 +101,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
           { description: repo.displayName }
         )
       } else {
-        repo = await addRepoPath(folderPath)
+        repo = await addRepoPath(folderPath, 'git', { runtimeEnvironmentId })
       }
 
       if (!mountedRef.current || gen !== addGenRef.current) {
@@ -147,6 +152,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
     isAdding,
     mountedRef,
     openNonGitConfirmation,
+    runtimeEnvironmentId,
     setHideDefaultBranchWorkspace
   ])
 

@@ -46,7 +46,11 @@ export function useAddRepoLocalFolderFlow({
   isOpen: boolean
   droppedLocalPath: string
   activeRuntimeEnvironmentId: string | null | undefined
-  addRepoPath: (path: string, kind?: 'git' | 'folder') => Promise<Repo | null>
+  addRepoPath: (
+    path: string,
+    kind?: 'git' | 'folder',
+    options?: { runtimeEnvironmentId?: string | null }
+  ) => Promise<Repo | null>
   closeModal: () => void
   fetchWorktrees: (repoId: string, options?: { requireAuthoritative?: boolean }) => Promise<unknown>
   scanNestedRepos: (
@@ -153,7 +157,11 @@ export function useAddRepoLocalFolderFlow({
           return { status: 'paused' }
         }
         setAddProjectBusyLabel('Opening project...')
-        const repo = await addRepoPath(path)
+        // Why: native-picker/dropped paths are always local, so force local routing.
+        // The host selector can display "Local" while the global active-runtime still
+        // points at an unavailable runtime; without this, addRepoPath would misroute
+        // the add to that host and fail its path check.
+        const repo = await addRepoPath(path, 'git', { runtimeEnvironmentId: null })
         if (gen !== localAddGenRef.current) {
           return { status: 'cancelled' }
         }
