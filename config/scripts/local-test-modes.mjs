@@ -396,7 +396,6 @@ function parseArgs(argv) {
     dryRun: false,
     keep: false,
     noBuild: false,
-    web: false,
     ssh: 'localhost',
     help: false
   }
@@ -409,8 +408,6 @@ function parseArgs(argv) {
       out.keep = true
     } else if (arg === '--no-build') {
       out.noBuild = true
-    } else if (arg === '--web') {
-      out.web = true
     } else if (arg === '--ssh=docker') {
       out.ssh = 'docker'
     } else if (arg === '--ssh=localhost') {
