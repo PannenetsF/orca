@@ -1655,6 +1655,48 @@ describe('applyWebSessionTabsSnapshot', () => {
     expect(patch.sortEpoch).toBe(1)
   })
 
+  // A runtime Orca Server now sends providerSession in its mobile snapshot; the mirror must preserve it so resolveNativeChatSession gets a real sessionId and native chat reads the transcript instead of showing an empty view.
+  it('preserves providerSession when remapping host agent status onto mirrored pane keys', () => {
+    const hostPaneKey = makePaneKey('host-tab-1', LEAF_ID)
+    const providerSession = {
+      key: 'session_id' as const,
+      id: 'conversation-xyz',
+      transcriptPath: '/home/dev/.claude/projects/demo/conversation-xyz.jsonl'
+    }
+    const patch = applyWebSessionTabsSnapshot(
+      makeState(),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'claude [working]',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          status: 'ready',
+          terminal: 'terminal-1',
+          agentStatus: {
+            state: 'working',
+            prompt: 'read the code',
+            updatedAt: NOW - 100,
+            stateStartedAt: NOW - 1_000,
+            agentType: 'claude',
+            paneKey: hostPaneKey,
+            terminalTitle: 'claude [working]',
+            stateHistory: [],
+            providerSession
+          }
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    const mirroredId = patch.tabsByWorktree?.[WT]?.[0]?.id
+    const mirroredPaneKey = makePaneKey(mirroredId!, LEAF_ID)
+    expect(patch.agentStatusByPaneKey?.[mirroredPaneKey]?.providerSession).toEqual(providerSession)
+  })
+
   it('bumps aggregate epochs when a mirrored same-state entry gains attribution', () => {
     const hostPaneKey = makePaneKey('host-tab-1', LEAF_ID)
     const snapshot = makeSnapshot([
