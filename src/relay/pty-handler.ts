@@ -575,6 +575,7 @@ export class PtyHandler {
     this.dispatcher.onRequest('pty.sendSignal', (p) => this.sendSignal(p))
     this.dispatcher.onRequest('pty.getCwd', (p) => this.getCwd(p))
     this.dispatcher.onRequest('pty.getInitialCwd', (p) => this.getInitialCwd(p))
+    this.dispatcher.onRequest('pty.getSize', (p) => this.getSize(p))
     this.dispatcher.onRequest('pty.clearBuffer', (p) => this.clearBuffer(p))
     this.dispatcher.onRequest('pty.hasChildProcesses', (p) => this.hasChildProcesses(p))
     this.dispatcher.onRequest('pty.getForegroundProcess', (p) => this.getForegroundProcess(p))
@@ -1019,6 +1020,16 @@ export class PtyHandler {
     if (managed && !managed.disposed) {
       managed.pty.resize(cols, rows)
     }
+  }
+
+  private async getSize(
+    params: Record<string, unknown>
+  ): Promise<{ cols: number; rows: number } | null> {
+    const managed = this.ptys.get(params.id as string)
+    if (!managed || managed.disposed) {
+      return null
+    }
+    return { cols: managed.pty.cols, rows: managed.pty.rows }
   }
 
   private async shutdown(params: Record<string, unknown>): Promise<void> {

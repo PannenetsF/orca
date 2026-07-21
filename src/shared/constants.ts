@@ -32,6 +32,7 @@ import { DEFAULT_SOURCE_CONTROL_GROUP_ORDER } from './source-control-group-order
 import { DEFAULT_SETUP_AGENT_STARTUP_POLICY } from './setup-agent-startup-policy'
 import { DESKTOP_TERMINAL_SCROLLBACK_ROWS_DEFAULT } from './terminal-scrollback-policy'
 import { DEFAULT_USAGE_PERCENTAGE_DISPLAY } from './usage-percentage-display'
+import { DEFAULT_STATUS_BAR_USAGE_MODE } from './status-bar-usage-mode'
 
 export { DEFAULT_STATUS_BAR_ITEMS } from './status-bar-defaults'
 export {
@@ -228,7 +229,8 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalRightClickToPasteDefaultedForPlatform: true,
     terminalWindowsShell: 'powershell.exe',
     terminalWindowsWslDistro: null,
-    localAccountRuntime: 'host',
+    localAccountRuntime: 'auto',
+    localAccountRuntimeDefaultedToAutoForAllUsers: true,
     localAccountWslDistro: null,
     localWindowsRuntimeDefault: { kind: 'windows-host' },
     // Why: prefer modern PowerShell when installed, falling back to inbox Windows PowerShell.
@@ -334,6 +336,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // Why: off keeps the cosmetic overlay unmounted for users who never opt in.
     experimentalPet: false,
     experimentalActivity: false,
+    experimentalAgentDashboardPopout: false,
     experimentalActivityDefaultedOffForAllUsers: true,
     experimentalTerminalAttention: false,
     experimentalAgentHibernation: false,
@@ -464,6 +467,7 @@ export function getDefaultUIState(): PersistedUIState {
     statusBarItems: [...DEFAULT_STATUS_BAR_ITEMS],
     statusBarVisible: true,
     usagePercentageDisplay: DEFAULT_USAGE_PERCENTAGE_DISPLAY,
+    statusBarUsageMode: DEFAULT_STATUS_BAR_USAGE_MODE,
     dismissedUpdateVersion: null,
     lastUpdateCheckAt: null,
     trustedOrcaHooks: {},

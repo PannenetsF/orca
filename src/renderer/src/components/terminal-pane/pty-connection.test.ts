@@ -1062,7 +1062,7 @@ describe('connectPanePty', () => {
       'wt-1',
       expect.objectContaining({
         url: 'https://github.com/acme/orca/pull/42',
-        slug: { owner: 'acme', repo: 'orca' },
+        slug: { owner: 'acme', repo: 'orca', host: 'github.com' },
         number: 42
       })
     )
@@ -17803,6 +17803,8 @@ describe('connectPanePty', () => {
         stateHistory: []
       }
       releaseConfirmingNullSample?.()
+      // Ignore cursor resets from setup so this assertion only covers the replacement idle event.
+      pane.terminal.write.mockClear()
       idleHandler('Claude done')
       await vi.advanceTimersByTimeAsync(800)
       await vi.advanceTimersByTimeAsync(AGENT_TASK_COMPLETE_NOTIFICATION_MAX_WAIT_MS)

@@ -5377,6 +5377,7 @@ describe('OrcaRuntimeService', () => {
   })
 
   it('allows host integration slug helpers for SSH repos through provider-aware GitHub clients', async () => {
+    const prRepo = { owner: 'acme', repo: 'orca', host: 'github.acme.test' }
     getIssueMock.mockResolvedValueOnce({ number: 12, title: 'Remote issue' })
     listGitHubIssuesMock.mockResolvedValueOnce({
       items: [{ number: 7, title: 'Remote issue list item' }]
@@ -5404,16 +5405,30 @@ describe('OrcaRuntimeService', () => {
     await expect(runtime.listRepoIssues('id:repo-1', 10)).resolves.toEqual([
       { number: 7, title: 'Remote issue list item' }
     ])
-    await expect(runtime.requestRepoPRReviewers('id:repo-1', 7, ['alex'])).resolves.toEqual({
-      ok: true
-    })
-    await expect(runtime.removeRepoPRReviewers('id:repo-1', 7, ['alex'])).resolves.toEqual({
+    await expect(runtime.requestRepoPRReviewers('id:repo-1', 7, ['alex'], prRepo)).resolves.toEqual(
+      {
+        ok: true
+      }
+    )
+    await expect(runtime.removeRepoPRReviewers('id:repo-1', 7, ['alex'], prRepo)).resolves.toEqual({
       ok: true
     })
     expect(getIssueMock).toHaveBeenCalledWith('/remote/repo', 12, 'ssh-1')
     expect(listGitHubIssuesMock).toHaveBeenCalledWith('/remote/repo', 10, undefined, 'ssh-1')
-    expect(requestGitHubPRReviewersMock).toHaveBeenCalledWith('/remote/repo', 7, ['alex'], 'ssh-1')
-    expect(removeGitHubPRReviewersMock).toHaveBeenCalledWith('/remote/repo', 7, ['alex'], 'ssh-1')
+    expect(requestGitHubPRReviewersMock).toHaveBeenCalledWith(
+      '/remote/repo',
+      7,
+      ['alex'],
+      'ssh-1',
+      prRepo
+    )
+    expect(removeGitHubPRReviewersMock).toHaveBeenCalledWith(
+      '/remote/repo',
+      7,
+      ['alex'],
+      'ssh-1',
+      prRepo
+    )
   })
 
   it('routes runtime GitHub repo identity helpers through the selected WSL project runtime', async () => {
@@ -5587,14 +5602,18 @@ describe('OrcaRuntimeService', () => {
     }
     const runtime = new OrcaRuntimeService(runtimeStore as never)
     const localGitOptions = { wslDistro: 'Ubuntu' }
-    const prRepo = { owner: 'acme', repo: 'orca' }
+    const prRepo = { owner: 'acme', repo: 'orca', host: 'github.acme.test' }
 
     await runtime.getRepoPRForBranch('id:repo-1', 'feature/wsl', 42, 43)
     await runtime.getRepoWorkItem('id:repo-1', 42, 'pr')
     await runtime.getRepoWorkItemByOwnerRepo('id:repo-1', prRepo, 42, 'pr')
     await runtime.getRepoWorkItemDetails('id:repo-1', 42, 'pr')
     await runtime.getRepoPRChecks('id:repo-1', 42, 'head-sha', prRepo, { noCache: true })
-    await runtime.rerunRepoPRChecks('id:repo-1', 42, { headSha: 'head-sha', failedOnly: true })
+    await runtime.rerunRepoPRChecks('id:repo-1', 42, {
+      headSha: 'head-sha',
+      failedOnly: true,
+      prRepo
+    })
     await runtime.getRepoPRCheckDetails('id:repo-1', {
       checkRunId: 9,
       workflowRunId: 8,
@@ -5605,13 +5624,15 @@ describe('OrcaRuntimeService', () => {
     await runtime.getRepoPRComments('id:repo-1', 42, prRepo, { noCache: true })
     await runtime.getRepoPRFileContents('id:repo-1', {
       prNumber: 42,
+      prRepo,
       path: 'src/app.ts',
       status: 'modified',
       headSha: 'head-sha',
       baseSha: 'base-sha'
     })
-    await runtime.resolveRepoReviewThread('id:repo-1', 'thread-1', true)
+    await runtime.resolveRepoReviewThread('id:repo-1', 'thread-1', true, prRepo)
     await runtime.setRepoPRFileViewed('id:repo-1', {
+      prRepo,
       pullRequestId: 'PR_kw',
       path: 'src/app.ts',
       viewed: true
@@ -5620,11 +5641,12 @@ describe('OrcaRuntimeService', () => {
     await runtime.updateRepoPRDetails('id:repo-1', 42, { body: 'New body' }, prRepo)
     await runtime.mergeRepoPR('id:repo-1', 42, 'squash', prRepo)
     await runtime.setRepoPRAutoMerge('id:repo-1', 42, true, 'squash', prRepo)
-    await runtime.updateRepoPRState('id:repo-1', 42, { state: 'closed' })
-    await runtime.requestRepoPRReviewers('id:repo-1', 42, ['octo'])
-    await runtime.removeRepoPRReviewers('id:repo-1', 42, ['octo'])
+    await runtime.updateRepoPRState('id:repo-1', 42, { state: 'closed' }, prRepo)
+    await runtime.requestRepoPRReviewers('id:repo-1', 42, ['octo'], prRepo)
+    await runtime.removeRepoPRReviewers('id:repo-1', 42, ['octo'], prRepo)
     await runtime.addRepoPRReviewComment('id:repo-1', {
       prNumber: 42,
+      prRepo,
       body: 'Inline',
       commitId: 'head-sha',
       path: 'src/app.ts',
@@ -5684,7 +5706,7 @@ describe('OrcaRuntimeService', () => {
     expect(rerunGitHubPRChecksMock).toHaveBeenCalledWith(
       TEST_REPO_PATH,
       42,
-      { headSha: 'head-sha', failedOnly: true },
+      { headSha: 'head-sha', failedOnly: true, prRepo },
       null,
       localGitOptions
     )
@@ -5708,17 +5730,18 @@ describe('OrcaRuntimeService', () => {
       localGitOptions
     )
     expect(getGitHubPRFileContentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ repoPath: TEST_REPO_PATH, localGitOptions })
+      expect.objectContaining({ repoPath: TEST_REPO_PATH, localGitOptions, prRepo })
     )
     expect(resolveGitHubReviewThreadMock).toHaveBeenCalledWith(
       TEST_REPO_PATH,
       'thread-1',
       true,
       null,
+      prRepo,
       localGitOptions
     )
     expect(setGitHubPRFileViewedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ repoPath: TEST_REPO_PATH, localGitOptions })
+      expect.objectContaining({ repoPath: TEST_REPO_PATH, localGitOptions, prRepo })
     )
     expect(updateGitHubPRTitleMock).toHaveBeenCalledWith(
       TEST_REPO_PATH,
@@ -5758,6 +5781,7 @@ describe('OrcaRuntimeService', () => {
       42,
       { state: 'closed' },
       null,
+      prRepo,
       localGitOptions
     )
     expect(requestGitHubPRReviewersMock).toHaveBeenCalledWith(
@@ -5765,6 +5789,7 @@ describe('OrcaRuntimeService', () => {
       42,
       ['octo'],
       null,
+      prRepo,
       localGitOptions
     )
     expect(removeGitHubPRReviewersMock).toHaveBeenCalledWith(
@@ -5772,12 +5797,14 @@ describe('OrcaRuntimeService', () => {
       42,
       ['octo'],
       null,
+      prRepo,
       localGitOptions
     )
     expect(addGitHubPRReviewCommentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         repoPath: TEST_REPO_PATH,
         localGitOptions,
+        prRepo,
         body: 'Inline'
       })
     )
@@ -7656,7 +7683,7 @@ describe('OrcaRuntimeService', () => {
           kind: 'pr-link',
           link: {
             url: 'https://github.com/acme/orca/pull/42',
-            slug: { owner: 'acme', repo: 'orca' },
+            slug: { owner: 'acme', repo: 'orca', host: 'github.com' },
             number: 42
           }
         },
@@ -7664,7 +7691,7 @@ describe('OrcaRuntimeService', () => {
           kind: 'pr-link',
           link: {
             url: 'https://github.com/acme/orca/pull/43',
-            slug: { owner: 'acme', repo: 'orca' },
+            slug: { owner: 'acme', repo: 'orca', host: 'github.com' },
             number: 43
           }
         }
@@ -10528,10 +10555,13 @@ describe('OrcaRuntimeService', () => {
         ORCA_AGENT_HOOK_PORT: '1111',
         ORCA_AGENT_HOOK_TOKEN: 'stale-token',
         ORCA_AGENT_HOOK_ENDPOINT: '/tmp/stale-endpoint.env'
-      }
+      },
+      envToDelete: ['CODEX_HOME', 'ORCA_CODEX_HOME']
     })
 
-    const spawnCall = spawn.mock.calls[0]?.[0] as { env?: Record<string, string> } | undefined
+    const spawnCall = spawn.mock.calls[0]?.[0] as
+      | { env?: Record<string, string>; envToDelete?: string[] }
+      | undefined
     expect(spawnCall?.env).toEqual(
       expect.objectContaining({
         ORCA_AGENT_HOOK_PORT: '5678',
@@ -10544,6 +10574,7 @@ describe('OrcaRuntimeService', () => {
       })
     )
     expect(spawnCall?.env?.ORCA_AGENT_HOOK_ENDPOINT).toBeUndefined()
+    expect(spawnCall?.envToDelete).toEqual(['CODEX_HOME', 'ORCA_CODEX_HOME'])
   })
 
   it.each([
@@ -14664,6 +14695,57 @@ describe('OrcaRuntimeService', () => {
         agentType: 'claude',
         paneKey,
         providerSession
+      })
+    )
+
+    unsubscribe()
+  })
+
+  // Why: restored OMP panes can retain the hook while the wrapped Pi owns foreground (#6364).
+  it('keeps an OMP hook labeled OMP when the wrapped pi child owns the foreground', async () => {
+    const spawn = vi.fn().mockResolvedValue({ id: 'omp-flicker-pty' })
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn,
+      write: () => true,
+      kill: () => true,
+      // Why: the remote relay reads the deeper `pi` child of the omp process tree.
+      getForegroundProcess: async () => 'pi'
+    })
+    const events: RuntimeMobileSessionTabsResult[] = []
+    const unsubscribe = runtime.onMobileSessionTabsChanged((snapshot) => events.push(snapshot))
+
+    await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'omp-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    // Restored/mirrored pane: no launchAgent, only the pi foreground read remains.
+    const pty = (
+      runtime as unknown as {
+        ptysById: Map<string, { launchAgent: string | null; foregroundAgent: string | null }>
+      }
+    ).ptysById.get('omp-flicker-pty')!
+    pty.launchAgent = null
+    pty.foregroundAgent = 'pi'
+    events.length = 0
+
+    runtime.onPtyData(
+      'omp-flicker-pty',
+      '\x1b]0;⠋ Pi\x07' +
+        '\x1b]9999;{"state":"working","prompt":"fix the bug","agentType":"omp"}\x07',
+      100
+    )
+
+    await waitForMobileSessionTabsEvents(events, 1)
+    expect(events[0]?.tabs[0]).toEqual(
+      expect.objectContaining({
+        type: 'terminal',
+        title: '⠋ OMP',
+        agentStatus: expect.objectContaining({
+          state: 'working',
+          agentType: 'omp',
+          terminalTitle: '⠋ OMP'
+        })
       })
     )
 
@@ -26474,6 +26556,31 @@ describe('OrcaRuntimeService', () => {
     })
 
     expect(removeWorktreeLineage).not.toHaveBeenCalled()
+  })
+
+  it('hides agent scratch created inside a linked checkout from runtime listings', async () => {
+    const linkedCheckoutPath = '/tmp/worktree-a'
+    const scratchPath = `${linkedCheckoutPath}/.claude/worktrees/agent-a04ccaaa`
+    vi.mocked(listWorktrees).mockClear()
+    vi.mocked(listWorktrees).mockResolvedValue([
+      makeWorktreeInfo(TEST_REPO_PATH),
+      makeWorktreeInfo(linkedCheckoutPath),
+      makeWorktreeInfo(scratchPath)
+    ])
+    const runtime = createRuntime()
+
+    const detected = await runtime.listDetectedManagedWorktrees(`id:${TEST_REPO_ID}`)
+    const listed = await runtime.listManagedWorktrees(`id:${TEST_REPO_ID}`)
+
+    expect(detected.worktrees.find((worktree) => worktree.path === scratchPath)).toMatchObject({
+      ownership: 'agent-scratch',
+      visible: false
+    })
+    expect(listed.worktrees.map((worktree) => worktree.path)).toEqual([
+      TEST_REPO_PATH,
+      linkedCheckoutPath
+    ])
+    expect(listWorktrees).toHaveBeenCalledTimes(1)
   })
 
   it('bounds repeated detected worktree scans across the reported 15-repo shape', async () => {

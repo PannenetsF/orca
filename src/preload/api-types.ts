@@ -9,6 +9,11 @@ import type {
   HostedReviewProvider
 } from '../shared/hosted-review'
 import type { NativeFileDropPayload } from '../shared/native-file-drop'
+import type { DashboardSnapshot, DashboardRevealAgentArgs } from '../shared/dashboard-snapshot'
+import type {
+  TerminalPreviewConnectResult,
+  TerminalPreviewDataPayload
+} from '../shared/terminal-preview'
 import type {
   TerminalTabCloseRequest,
   TerminalTabCloseResponse
@@ -258,6 +263,7 @@ import type {
   GetProjectViewTableResult,
   GitHubProjectCommentMutationResult,
   GitHubProjectMutationResult,
+  ListAccessibleProjectsArgs,
   ListAccessibleProjectsResult,
   ListAssignableUsersBySlugArgs,
   ListAssignableUsersBySlugResult,
@@ -433,6 +439,10 @@ import type {
   AiVaultSubagentListArgs,
   AiVaultSubagentListResult
 } from '../shared/ai-vault-types'
+import type {
+  AiVaultPrepareSessionResumeArgs,
+  AiVaultPrepareSessionResumeResult
+} from '../shared/ai-vault-resume-preparation'
 import type {
   AgentType,
   NativeChatMessage,
@@ -822,6 +832,9 @@ export type OpenCodeUsageApi = {
 
 export type AiVaultApi = {
   listSessions: (args?: AiVaultListArgs) => Promise<AiVaultListResult>
+  prepareSessionResume: (
+    args: AiVaultPrepareSessionResumeArgs
+  ) => Promise<AiVaultPrepareSessionResumeResult>
   /** Lists the Task subagent transcripts of one session, on demand. */
   listSubagentSessions: (args: AiVaultSubagentListArgs) => Promise<AiVaultSubagentListResult>
   /** Fires when any app window regains OS focus; returns an unsubscribe. */
@@ -1274,6 +1287,7 @@ export type PreloadApi = {
       cwd?: string
       cwdFallback?: 'worktree'
       env?: Record<string, string>
+      envToDelete?: string[]
       command?: string
       launchConfig?: SleepingAgentLaunchConfig
       launchToken?: string
@@ -1476,11 +1490,11 @@ export type PreloadApi = {
     repoSlug: (args: {
       repoPath: string
       repoId?: string
-    }) => Promise<{ owner: string; repo: string } | null>
+    }) => Promise<{ owner: string; repo: string; host?: string } | null>
     repoUpstream: (args: {
       repoPath: string
       repoId?: string
-    }) => Promise<{ owner: string; repo: string } | null>
+    }) => Promise<{ owner: string; repo: string; host?: string } | null>
     prForBranch: (args: {
       repoPath: string
       repoId?: string
@@ -1519,6 +1533,7 @@ export type PreloadApi = {
       repoId?: string
       owner: string
       repo: string
+      host?: string
       number: number
       type: 'issue' | 'pr'
     }) => Promise<Omit<GitHubWorkItem, 'repoId'> | null>
@@ -1537,6 +1552,7 @@ export type PreloadApi = {
     prFileContents: (
       args: GitHubRepoSelectorArgs & {
         prNumber: number
+        prRepo?: GitHubOwnerRepo | null
         path: string
         oldPath?: string
         status: GitHubPRFile['status']
@@ -1590,6 +1606,7 @@ export type PreloadApi = {
         prNumber: number
         headSha?: string
         failedOnly?: boolean
+        prRepo?: GitHubOwnerRepo | null
       }
     ) => Promise<{ ok: true; count: number } | { ok: false; error: string }>
     prComments: (args: {
@@ -1606,10 +1623,12 @@ export type PreloadApi = {
       sourceContext?: TaskSourceContext | null
       threadId: string
       resolve: boolean
+      prRepo?: GitHubOwnerRepo | null
     }) => Promise<boolean>
     setPRFileViewed: (
       args: GitHubRepoSelectorArgs & {
         prNumber: number
+        prRepo?: GitHubOwnerRepo | null
         pullRequestId: string
         path: string
         viewed: boolean
@@ -1641,18 +1660,21 @@ export type PreloadApi = {
       args: GitHubRepoSelectorArgs & {
         prNumber: number
         updates: { state: 'open' | 'closed' }
+        prRepo?: GitHubOwnerRepo | null
       }
     ) => Promise<{ ok: true } | { ok: false; error: string }>
     requestPRReviewers: (
       args: GitHubRepoSelectorArgs & {
         prNumber: number
         reviewers: string[]
+        prRepo?: GitHubOwnerRepo | null
       }
     ) => Promise<{ ok: true } | { ok: false; error: string }>
     removePRReviewers: (
       args: GitHubRepoSelectorArgs & {
         prNumber: number
         reviewers: string[]
+        prRepo?: GitHubOwnerRepo | null
       }
     ) => Promise<{ ok: true } | { ok: false; error: string }>
     updateIssue: (
@@ -1715,9 +1737,11 @@ export type PreloadApi = {
      */
     rateLimit: (args?: { force?: boolean }) => Promise<GetRateLimitResult>
     /** Explains scope_missing ProjectV2 failures — notably a shell `GITHUB_TOKEN` shadowing the keyring credential, where `gh auth refresh` is a no-op. */
-    diagnoseAuth: () => Promise<GhAuthDiagnostic>
+    diagnoseAuth: (args?: { host?: string }) => Promise<GhAuthDiagnostic>
     // ── ProjectV2 (GitHub Projects) ─────────────────────────────────
-    listAccessibleProjects: () => Promise<ListAccessibleProjectsResult>
+    listAccessibleProjects: (
+      args?: ListAccessibleProjectsArgs
+    ) => Promise<ListAccessibleProjectsResult>
     resolveProjectRef: (args: ResolveProjectRefArgs) => Promise<ResolveProjectRefResult>
     listProjectViews: (args: ListProjectViewsArgs) => Promise<ListProjectViewsResult>
     getProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
@@ -2203,6 +2227,29 @@ export type PreloadApi = {
         checklist?: Partial<OnboardingState['checklist']>
       }
     ) => Promise<OnboardingState>
+  }
+  dashboard: {
+    openPopout: () => Promise<void>
+    publishSnapshot: (snapshot: DashboardSnapshot) => Promise<void>
+    getPopoutOpen: () => Promise<boolean>
+    onPopoutOpenChanged: (callback: (open: boolean) => void) => () => void
+    onSnapshotRequested: (callback: () => void) => () => void
+    onRevealAgent: (callback: (args: DashboardRevealAgentArgs) => void) => () => void
+    onAckAgent: (callback: (paneKey: string) => void) => () => void
+    requestSnapshot: () => Promise<void>
+    onSnapshot: (callback: (snapshot: DashboardSnapshot) => void) => () => void
+    revealAgent: (args: DashboardRevealAgentArgs) => Promise<void>
+    ackAgent: (paneKey: string) => Promise<void>
+  }
+  terminalPreview: {
+    connect: (
+      ptyId: string,
+      opts?: { scrollbackRows?: number }
+    ) => Promise<TerminalPreviewConnectResult>
+    input: (ptyId: string, data: string) => Promise<boolean>
+    ack: (ptyId: string, bytes: number) => Promise<void>
+    unsubscribe: (ptyId: string) => Promise<void>
+    onData: (callback: (payload: TerminalPreviewDataPayload) => void) => () => void
   }
   developerPermissions: {
     getStatus: () => Promise<DeveloperPermissionState[]>

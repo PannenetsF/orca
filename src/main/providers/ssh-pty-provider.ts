@@ -3,6 +3,7 @@ import type { IPtyProvider, PtyProcessInfo, PtySpawnOptions, PtySpawnResult } fr
 import { toAppSshPtyId, toRelaySshPtyId } from './ssh-pty-id'
 import { seedPowerlevel10kWizardEnv } from '../pty/powerlevel10k-wizard-env'
 import { PTY_STARTUP_INGRESS_VERSION } from '../../shared/pty-startup-ingress'
+import { createSshPtyAppliedSizeReader } from './ssh-pty-applied-size'
 
 type DataCallback = (payload: {
   id: string
@@ -38,9 +39,7 @@ export function isSshPtyIdentityMismatchError(err: unknown): boolean {
 // timeout — convert only here, at the RPC itself, so sequential relay calls share
 // the remaining budget (undefined keeps the multiplexer default timeout).
 function relayTimeoutOptions(deadlineMs: number | undefined): { timeoutMs: number } | undefined {
-  return deadlineMs === undefined
-    ? undefined
-    : { timeoutMs: Math.max(1, deadlineMs - Date.now()) }
+  return deadlineMs === undefined ? undefined : { timeoutMs: Math.max(1, deadlineMs - Date.now()) }
 }
 
 /**
@@ -58,6 +57,7 @@ export class SshPtyProvider implements IPtyProvider {
   // multiplexer. Without this, notification callbacks keep firing after
   // the provider is torn down on disconnect, routing events to stale state.
   private unsubscribeNotifications: (() => void) | null = null
+  readonly getAppliedSize: NonNullable<IPtyProvider['getAppliedSize']>
 
   constructor(
     connectionId: string,
@@ -66,6 +66,7 @@ export class SshPtyProvider implements IPtyProvider {
   ) {
     this.connectionId = connectionId
     this.mux = mux
+    this.getAppliedSize = createSshPtyAppliedSizeReader(mux, connectionId)
 
     // Subscribe to relay notifications for PTY events
     this.unsubscribeNotifications = mux.onNotification((method, params) => {

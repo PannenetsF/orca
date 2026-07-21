@@ -8,6 +8,10 @@ import type {
 } from '../../../preload/api-types'
 import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
 import type { AiVaultListArgs, AiVaultListResult } from '../../../shared/ai-vault-types'
+import type {
+  AiVaultPrepareSessionResumeArgs,
+  AiVaultPrepareSessionResumeResult
+} from '../../../shared/ai-vault-resume-preparation'
 import { buildNativeChatUnsubscribe } from '../../../shared/native-chat-stream-unsubscribe'
 import type {
   ComputerUsePermissionSetupResult,
@@ -75,6 +79,7 @@ import { normalizeTerminalCursorStyleDefault } from '../../../shared/terminal-cu
 import { normalizeTerminalCustomThemes } from '../../../shared/terminal-custom-themes'
 import { normalizeUiLanguage } from '../../../shared/ui-language'
 import { normalizeUsagePercentageDisplay } from '../../../shared/usage-percentage-display'
+import { normalizeStatusBarUsageMode } from '../../../shared/status-bar-usage-mode'
 import type { RateLimitState } from '../../../shared/rate-limit-types'
 import type { RuntimeStatus, RuntimeSyncWindowGraph } from '../../../shared/runtime-types'
 import {
@@ -1316,6 +1321,8 @@ function createAiVaultApi(): NonNullable<Partial<PreloadApi>['aiVault']> {
         executionHostId
       })
     },
+    prepareSessionResume: (args: AiVaultPrepareSessionResumeArgs) =>
+      callRuntimeResult<AiVaultPrepareSessionResumeResult>('aiVault.prepareSessionResume', args),
     // Why: no server-side RPC for subagent transcript listing yet, so report an empty (not erroring) result.
     listSubagentSessions: () => Promise.resolve({ sessions: [], issues: [] }),
     onWindowFocused: () => noopUnsubscribe
@@ -2188,9 +2195,10 @@ function createGitHubApi(): WebGitHubApi {
         ok: false,
         message: translate('auto.web.web.preload.api.31bfe8ae1a', 'Unavailable in the web client.')
       } as never),
-    listAccessibleProjects: () =>
+    listAccessibleProjects: (args) =>
       route<WebGitHubResult<'listAccessibleProjects'>>(
-        GITHUB_WEB_RPC_METHODS.listAccessibleProjects
+        GITHUB_WEB_RPC_METHODS.listAccessibleProjects,
+        args
       ),
     resolveProjectRef: (args) =>
       route<WebGitHubResult<'resolveProjectRef'>>(GITHUB_WEB_RPC_METHODS.resolveProjectRef, args),
@@ -3449,6 +3457,9 @@ function mergeWebUIState(
     ),
     usagePercentageDisplay: normalizeUsagePercentageDisplay(
       safeUpdates.usagePercentageDisplay ?? base.usagePercentageDisplay
+    ),
+    statusBarUsageMode: normalizeStatusBarUsageMode(
+      safeUpdates.statusBarUsageMode ?? base.statusBarUsageMode
     )
   }
 }

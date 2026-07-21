@@ -499,6 +499,7 @@ type RuntimeTerminalCreateBaseRequestPayload = {
   command?: string
   cwd?: string
   env?: Record<string, string>
+  envToDelete?: string[]
   launchConfig?: SleepingAgentLaunchConfig
   launchToken?: string
   launchAgent?: TuiAgent
@@ -1058,6 +1059,8 @@ export type BrowserErrorCode =
   | 'browser_no_tab'
   | 'browser_tab_not_found'
   | 'browser_tab_closed'
+  | 'browser_tab_changed'
+  | 'browser_owner_unavailable'
   | 'browser_stale_ref'
   | 'browser_ref_not_found'
   | 'browser_navigation_failed'
