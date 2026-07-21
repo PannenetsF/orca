@@ -84,7 +84,10 @@ import { getCohortAtEmit } from '../telemetry/cohort-classifier'
 import type { RepoMethod } from '../../shared/telemetry-events'
 import { detectRepoIconAndUpstream } from '../repo-icon-autodetect'
 import { enrichMissingRepoGitRemoteIdentities } from '../repo-git-remote-identity-enrichment'
-import { getProjectHostSetupForRepo } from '../../shared/project-host-setup-projection'
+import {
+  getProjectHostSetupForRepo,
+  getProjectIdForProviderIdentity
+} from '../../shared/project-host-setup-projection'
 import {
   getRepoExecutionHostId,
   normalizeExecutionHostId,
@@ -131,20 +134,23 @@ function alignRepoWithRequestedProject(
   store: Store,
   repo: Repo,
   projectId: string,
-  setupMethod: ProjectHostSetupExistingFolderArgs['setupMethod'] = 'imported-existing-folder'
+  setupMethod: ProjectHostSetupExistingFolderArgs['setupMethod'] = 'imported-existing-folder',
+  requestedProviderIdentity?: ProjectHostSetupExistingFolderArgs['projectProviderIdentity']
 ): ProjectHostSetupResult {
   let setup = getProjectHostSetupForRepo(store.getProjectHostSetups(), repo)
   if (setup.projectId !== projectId) {
     const project = store.getProjects().find((entry) => entry.id === projectId)
-    if (!project?.providerIdentity || project.providerIdentity.provider !== 'github') {
+    // Why: the selected project can exist only on the source host, so its structured identity travels with the request.
+    const identity = project?.providerIdentity ?? requestedProviderIdentity
+    if (!identity || getProjectIdForProviderIdentity(identity) !== projectId) {
       throw new Error('Imported folder does not match the selected project identity.')
     }
     // Why: stamp the selected project's provider identity when the folder lacks upstream, so projection can merge it.
     const updated = store.updateRepo(repo.id, {
       upstream: {
-        owner: project.providerIdentity.owner,
-        repo: project.providerIdentity.repo,
-        ...(project.providerIdentity.host ? { host: project.providerIdentity.host } : {})
+        owner: identity.owner,
+        repo: identity.repo,
+        ...(identity.host ? { host: identity.host } : {})
       }
     })
     if (!updated) {
@@ -674,6 +680,14 @@ const ProjectGroupMoveProjectArgs = z.object({
 
 const ProjectHostSetupExistingFolderIpcArgs = z.object({
   projectId: z.string().min(1),
+  projectProviderIdentity: z
+    .object({
+      provider: z.literal('github'),
+      owner: z.string().min(1),
+      repo: z.string().min(1),
+      host: z.string().min(1).optional()
+    })
+    .optional(),
   hostId: z.string().min(1),
   path: z.string().min(1),
   kind: z.enum(['git', 'folder']).optional(),
@@ -1244,11 +1258,6 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       if (!parsedHost) {
         throw new Error(`Unsupported host: ${args.hostId}`)
       }
-      const existingProject = store.getProjects().find((project) => project.id === args.projectId)
-      if (!existingProject) {
-        throw new Error(`Project not found: ${args.projectId}`)
-      }
-
       const result =
         parsedHost.kind === 'local'
           ? await addLocalRepoFromPath(store, args.path, args.kind)
@@ -1266,15 +1275,26 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       if ('error' in result) {
         throw new Error(result.error)
       }
+      let aligned: ProjectHostSetupResult
+      try {
+        aligned = alignRepoWithRequestedProject(
+          store,
+          result.repo,
+          args.projectId,
+          args.setupMethod,
+          args.projectProviderIdentity
+        )
+      } catch (err) {
+        // Why: an import that cannot be linked must not leave a new repo registration or authorization root behind.
+        if (!result.alreadyExisted) {
+          store.removeProject(result.repo.id)
+          invalidateAuthorizedRootsCache()
+        }
+        throw err
+      }
       invalidateAuthorizedRootsCache()
       notifyReposChanged(mainWindow)
       emitRepoAdded('folder_picker', result.alreadyExisted)
-      const aligned = alignRepoWithRequestedProject(
-        store,
-        result.repo,
-        args.projectId,
-        args.setupMethod
-      )
       if (result.alreadyExisted) {
         await prepareLocalWorktreeRootForRepo(store, aligned.repo)
       }
