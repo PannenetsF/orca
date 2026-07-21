@@ -1487,7 +1487,7 @@ describe('Store', () => {
     const acknowledgedAt = 1_700_000_000_000
     writeDataFile({
       schemaVersion: 1,
-      repos: [makeRepo()],
+      repos: [makeRepo({ id: 'repo1' })],
       worktreeMeta: {},
       settings: {},
       ui: {
@@ -1499,7 +1499,7 @@ describe('Store', () => {
       },
       githubCache: { pr: {}, issue: {} },
       workspaceSession: {
-        activeRepoId: 'r1',
+        activeRepoId: 'repo1',
         activeWorktreeId: 'repo1::/worktree',
         activeTabId: 'tab1',
         tabsByWorktree: {
@@ -1549,7 +1549,7 @@ describe('Store', () => {
 
     writeDataFile({
       schemaVersion: 1,
-      repos: [makeRepo()],
+      repos: [makeRepo({ id: 'repo1' })],
       worktreeMeta: {},
       settings: {},
       ui: {
@@ -1560,7 +1560,7 @@ describe('Store', () => {
       },
       githubCache: { pr: {}, issue: {} },
       workspaceSession: {
-        activeRepoId: 'r1',
+        activeRepoId: 'repo1',
         activeWorktreeId: 'repo1::/worktree',
         activeTabId: 'tab1',
         tabsByWorktree: {
@@ -5070,7 +5070,7 @@ describe('Store', () => {
 
   it('reloads sourceControlViewMode from global settings without touching workspace state', async () => {
     const workspaceSession = {
-      activeRepoId: 'r1',
+      activeRepoId: 'repo1',
       activeWorktreeId: 'repo1::/worktree-a',
       activeTabId: 'tab1',
       tabsByWorktree: {
@@ -5100,7 +5100,7 @@ describe('Store', () => {
     }
     writeDataFile({
       schemaVersion: 1,
-      repos: [makeRepo()],
+      repos: [makeRepo({ id: 'repo1' })],
       worktreeMeta: {
         'repo1::/worktree-a': { status: 'active' },
         'repo1::/worktree-b': { status: 'active' }
@@ -5374,9 +5374,7 @@ describe('Store', () => {
       lastActivityAt: OLD,
       ...extra
     })
-    // testState.dir exists on disk (writeDataFile mkdir's it), so the orphan
-    // sharing the live repo's path is exactly the case gcStaleWorktreeMeta keeps
-    // (existsSync true) — the reported duplicate.
+    // Why: the stale-path GC keeps this existing directory, matching the reported duplicate.
     const livePath = testState.dir
     const liveKey = `live-repo::${livePath}`
     const orphanSamePathKey = `orphan-repo::${livePath}`
@@ -5394,21 +5392,30 @@ describe('Store', () => {
     const kept = Object.keys(store.getAllWorktreeMeta())
 
     expect(kept).toContain(liveKey)
-    expect(kept).not.toContain(orphanSamePathKey) // gcStale keeps it (path exists); orphan sweep removes it
-    expect(kept).not.toContain(orphanRemoteHostKey) // gcStale keeps it (remote host); orphan sweep removes it
+    expect(kept).not.toContain(orphanSamePathKey)
+    expect(kept).not.toContain(orphanRemoteHostKey)
   })
 
   it('sweeps workspace-session owner keys for a repo id absent from repos, across the legacy blob and host partitions', async () => {
     const liveKey = `live-repo::${testState.dir}`
     const orphanKey = 'orphan-repo::/home/tiger/workspace/libtorch'
+    const orphanEditorOnlyKey = 'orphan-repo::/home/tiger/workspace/editor-only'
     const liveTab = makeTerminalTab({ id: 'live-tab', worktreeId: liveKey })
     const orphanTab = makeTerminalTab({ id: 'orphan-tab', worktreeId: orphanKey })
+    const orphanFile = {
+      filePath: '/home/tiger/workspace/editor-only/README.md',
+      relativePath: 'README.md',
+      worktreeId: orphanEditorOnlyKey,
+      language: 'markdown'
+    }
     const sshHost = toSshExecutionHostId('conn-1')
     writeDataFile({
       repos: [makeRepo({ id: 'live-repo', path: testState.dir })],
       worktreeMeta: { [liveKey]: { displayName: '', comment: '', lastActivityAt: 1 } },
       workspaceSession: {
         ...getDefaultWorkspaceSession(),
+        activeRepoId: 'orphan-repo',
+        activeWorkspaceKey: worktreeWorkspaceKey(orphanKey),
         activeWorktreeId: orphanKey,
         activeWorktreeIdsOnShutdown: [orphanKey, liveKey],
         tabsByWorktree: { [liveKey]: [liveTab], [orphanKey]: [orphanTab] },
@@ -5416,13 +5423,17 @@ describe('Store', () => {
           'live-tab': { root: null, activeLeafId: null, expandedLeafId: null },
           'orphan-tab': { root: null, activeLeafId: null, expandedLeafId: null }
         },
+        remoteSessionIdsByTabId: {
+          'live-tab': 'remote-live',
+          'orphan-tab': 'remote-orphan'
+        },
+        openFilesByWorktree: { [orphanEditorOnlyKey]: [orphanFile] },
         lastVisitedAtByWorktreeId: { [liveKey]: 5, [orphanKey]: 9 }
       },
       workspaceSessionsByHostId: {
         [sshHost]: {
           ...getDefaultWorkspaceSession(),
-          tabsByWorktree: { [orphanKey]: [orphanTab] },
-          lastVisitedAtByWorktreeId: { [orphanKey]: 9 }
+          openFilesByWorktree: { [orphanEditorOnlyKey]: [orphanFile] }
         }
       }
     })
@@ -5436,11 +5447,16 @@ describe('Store', () => {
     expect(legacy.lastVisitedAtByWorktreeId?.[orphanKey]).toBeUndefined()
     expect(legacy.terminalLayoutsByTabId['live-tab']).toBeDefined()
     expect(legacy.terminalLayoutsByTabId['orphan-tab']).toBeUndefined()
+    expect(legacy.remoteSessionIdsByTabId?.['live-tab']).toBe('remote-live')
+    expect(legacy.remoteSessionIdsByTabId?.['orphan-tab']).toBeUndefined()
+    expect(legacy.openFilesByWorktree?.[orphanEditorOnlyKey]).toBeUndefined()
+    expect(legacy.activeRepoId).toBeNull()
+    expect(legacy.activeWorkspaceKey).toBeNull()
     expect(legacy.activeWorktreeId).toBeNull()
     expect(legacy.activeWorktreeIdsOnShutdown).toEqual([liveKey])
 
     const hostSession = store.getWorkspaceSession(sshHost)
-    expect(hostSession.tabsByWorktree[orphanKey]).toBeUndefined()
+    expect(hostSession.openFilesByWorktree?.[orphanEditorOnlyKey]).toBeUndefined()
   })
 
   it('does not wipe worktree state when there are no live repos (guards an anomalous empty-owner load)', async () => {
@@ -5458,8 +5474,7 @@ describe('Store', () => {
 
   it('sweeps and persists a lineage entry whose parent repo id is gone (no worktreeMeta/session twin)', async () => {
     const liveKey = `live-repo::${testState.dir}`
-    // The only orphaned state is a lineage entry pointing at a gone repo id, so
-    // the sweep must count the deletion (loadNeedsSave) for it to persist.
+    // Why: lineage-only deletion must still mark the loaded state for persistence.
     writeDataFile({
       repos: [makeRepo({ id: 'live-repo', path: testState.dir })],
       worktreeMeta: { [liveKey]: { displayName: '', comment: '', lastActivityAt: 1 } },
@@ -10253,13 +10268,13 @@ describe('Store native-chat tab viewMode persistence', () => {
     const WORKTREE = 'repo1::/worktree'
     writeDataFile({
       schemaVersion: 1,
-      repos: [makeRepo()],
+      repos: [makeRepo({ id: 'repo1' })],
       worktreeMeta: {},
       settings: {},
       ui: {},
       githubCache: { pr: {}, issue: {} },
       workspaceSession: {
-        activeRepoId: 'r1',
+        activeRepoId: 'repo1',
         activeWorktreeId: WORKTREE,
         activeTabId: 'chat-tab',
         tabsByWorktree: {},
