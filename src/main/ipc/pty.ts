@@ -122,7 +122,7 @@ import {
   type TerminalStartupCwdMissingDirFallback
 } from '../../shared/terminal-startup-cwd'
 import { isWslUncPath } from '../../shared/wsl-paths'
-import { splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
+import { getRepoIdFromWorktreeId, splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
 import type { AgentSessionOwnerBinding } from '../../shared/agent-session-host-authority'
 import {
   agentSessionOwnerBindingsEqual,
@@ -476,6 +476,32 @@ function getProvider(connectionId: string | null | undefined): IPtyProvider {
     throw new Error(`No PTY provider for connection "${connectionId}"`)
   }
   return provider
+}
+
+// Why: right after a fresh remote clone the renderer can briefly resolve the new
+// worktree to the local host (empty connectionId) before its SSH ownership
+// settles, so a spawn would run on localProvider with a remote cwd and fail with
+// "Working directory does not exist" until restart. Main owns the authoritative
+// repo catalog, so correct the route here — but only when it's unambiguous and
+// the SSH provider is live, never guessing.
+function resolveMisroutedSshConnectionId(
+  store: Store | undefined,
+  connectionId: string | null | undefined,
+  worktreeId: string | undefined
+): string | null {
+  if (connectionId || !worktreeId || !store) {
+    return null
+  }
+  const repoId = getRepoIdFromWorktreeId(worktreeId)
+  const owners = store.getRepos().filter((repo) => repo.id === repoId)
+  if (owners.length !== 1) {
+    return null
+  }
+  const ownerConnectionId = owners[0].connectionId?.trim()
+  if (!ownerConnectionId || !sshProviders.has(ownerConnectionId)) {
+    return null
+  }
+  return ownerConnectionId
 }
 
 function getProviderForPty(ptyId: string): IPtyProvider {
@@ -4012,6 +4038,21 @@ export function registerPtyHandlers(
       }
     ) => {
       const spawnTiming = createPtySpawnTiming()
+      // Why: recover a fresh-clone spawn the renderer misrouted to local before
+      // the new worktree's SSH ownership settled; otherwise it spawns on
+      // localProvider with a remote cwd and fails "Working directory does not
+      // exist" until restart. Rewrite first so the whole handler treats it as SSH.
+      const misroutedSshConnectionId = resolveMisroutedSshConnectionId(
+        store,
+        args.connectionId,
+        args.worktreeId
+      )
+      if (misroutedSshConnectionId) {
+        console.warn(
+          `[pty:spawn] rerouting local spawn for worktree "${args.worktreeId}" to SSH connection "${misroutedSshConnectionId}"`
+        )
+        args.connectionId = misroutedSshConnectionId
+      }
       const startupPromise = getLocalPtyStartupPromise(args.connectionId)
       if (startupPromise) {
         await startupPromise

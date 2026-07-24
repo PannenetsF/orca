@@ -889,6 +889,111 @@ describe('registerPtyHandlers', () => {
     }
   })
 
+  describe('fresh-clone SSH spawn reroute', () => {
+    const connectionId = 'ssh-1'
+    const worktreeId = 'repo-fresh::/home/user/proj'
+
+    function buildRerouteHarness(repos: { id: string; connectionId?: string }[]): {
+      sshSpawn: ReturnType<typeof vi.fn>
+      localSpawn: ReturnType<typeof vi.fn>
+    } {
+      const sshSpawn = vi.fn(async () => ({ id: 'ssh-pty' }))
+      const localSpawn = vi.fn(async () => ({ id: 'local-pty' }))
+      setLocalPtyProvider(createAgentClaimProvider({ spawn: localSpawn }) as never)
+      registerSshPtyProvider(connectionId, createAgentClaimProvider({ spawn: sshSpawn }) as never)
+      const store = {
+        getRepos: vi.fn(() => repos),
+        persistPtyBinding: vi.fn(),
+        upsertSshRemotePtyLease: vi.fn(),
+        removeSshRemotePtyLease: vi.fn(),
+        markSshRemotePtyLease: vi.fn()
+      }
+      handlers.clear()
+      registerPtyHandlers(
+        mainWindow as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        store as never
+      )
+      return { sshSpawn, localSpawn }
+    }
+
+    it('reroutes a local spawn to the owning SSH connection for a freshly-cloned repo', async () => {
+      const { sshSpawn, localSpawn } = buildRerouteHarness([{ id: 'repo-fresh', connectionId }])
+      await handlers.get('pty:spawn')!(null, {
+        cols: 80,
+        rows: 24,
+        cwd: '/home/user/proj',
+        connectionId: undefined,
+        worktreeId
+      })
+      expect(sshSpawn).toHaveBeenCalledTimes(1)
+      expect(localSpawn).not.toHaveBeenCalled()
+    })
+
+    it('leaves a genuine local spawn on the local provider', async () => {
+      const { sshSpawn, localSpawn } = buildRerouteHarness([
+        { id: 'repo-fresh', connectionId: undefined }
+      ])
+      await handlers.get('pty:spawn')!(null, {
+        cols: 80,
+        rows: 24,
+        cwd: '/home/user/proj',
+        connectionId: undefined,
+        worktreeId
+      })
+      expect(localSpawn).toHaveBeenCalledTimes(1)
+      expect(sshSpawn).not.toHaveBeenCalled()
+    })
+
+    it('does not reroute when the repo id is ambiguous across hosts', async () => {
+      const { sshSpawn, localSpawn } = buildRerouteHarness([
+        { id: 'repo-fresh', connectionId: undefined },
+        { id: 'repo-fresh', connectionId }
+      ])
+      await handlers.get('pty:spawn')!(null, {
+        cols: 80,
+        rows: 24,
+        cwd: '/home/user/proj',
+        connectionId: undefined,
+        worktreeId
+      })
+      expect(localSpawn).toHaveBeenCalledTimes(1)
+      expect(sshSpawn).not.toHaveBeenCalled()
+    })
+
+    it('does not reroute when the SSH provider is not registered', async () => {
+      const localSpawn = vi.fn(async () => ({ id: 'local-pty' }))
+      setLocalPtyProvider(createAgentClaimProvider({ spawn: localSpawn }) as never)
+      const store = {
+        getRepos: vi.fn(() => [{ id: 'repo-fresh', connectionId }]),
+        persistPtyBinding: vi.fn(),
+        upsertSshRemotePtyLease: vi.fn(),
+        removeSshRemotePtyLease: vi.fn(),
+        markSshRemotePtyLease: vi.fn()
+      }
+      handlers.clear()
+      registerPtyHandlers(
+        mainWindow as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        store as never
+      )
+      await handlers.get('pty:spawn')!(null, {
+        cols: 80,
+        rows: 24,
+        cwd: '/home/user/proj',
+        connectionId: undefined,
+        worktreeId
+      })
+      expect(localSpawn).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('rejects renderer persistence when a local PTY exits before spawn settles', async () => {
     const ptyId = 'pty-renderer-early-exit'
     const incarnationId = 'incarnation-renderer-early-exit'
