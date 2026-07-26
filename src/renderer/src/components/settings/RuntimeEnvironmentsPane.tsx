@@ -1328,12 +1328,14 @@ export function RuntimeEnvironmentsPane({
                   'Switch to'
                 )}
               </div>
-              <div className="mt-0.5 truncate font-medium">
+              <div className="mt-0.5 break-all font-medium">
                 {getEnvironmentLabel(pendingSwitchValue)}
               </div>
             </div>
           ) : null}
-          {switchError ? <p className="text-sm text-destructive">{switchError}</p> : null}
+          {switchError ? (
+            <p className="break-all text-sm text-destructive">{switchError}</p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1397,8 +1399,8 @@ export function RuntimeEnvironmentsPane({
           </DialogHeader>
           {pendingRemove ? (
             <div className="min-w-0 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-xs">
-              <div className="truncate font-medium">{pendingRemove.name}</div>
-              <div className="mt-0.5 truncate font-mono text-muted-foreground">
+              <div className="break-all font-medium">{pendingRemove.name}</div>
+              <div className="mt-0.5 break-all font-mono text-muted-foreground">
                 {pendingRemove.endpoints[0]?.endpoint ??
                   translate(
                     'auto.components.settings.RuntimeEnvironmentsPane.6ef71985da',
@@ -1407,7 +1409,9 @@ export function RuntimeEnvironmentsPane({
               </div>
             </div>
           ) : null}
-          {removeError ? <p className="text-sm text-destructive">{removeError}</p> : null}
+          {removeError ? (
+            <p className="break-all text-sm text-destructive">{removeError}</p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
