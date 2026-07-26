@@ -793,6 +793,51 @@ describe('project group store routing', () => {
     })
   })
 
+  it('routes a nested scan by the explicit runtime override, not the divergent global', async () => {
+    runtimeEnvironmentCall.mockResolvedValue({
+      id: 'rpc-scan',
+      ok: true,
+      result: { selectedPath: '/platform', selectedPathKind: 'git_repo', repos: [], maxDepth: 3 },
+      _meta: { runtimeId: 'runtime-remote' }
+    })
+    const store = createTestStore()
+    // Global points at a different runtime; the explicit override must win.
+    store.setState({ settings: { activeRuntimeEnvironmentId: 'wrong-env' } as never })
+
+    await store.getState().scanNestedRepos('/platform', undefined, {
+      runtimeEnvironmentId: 'env-1'
+    })
+
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'env-1',
+      method: 'projectGroup.scanNested',
+      params: { path: '/platform' },
+      timeoutMs: 20_000
+    })
+  })
+
+  it('routes a nested scan locally when the override is null, even with a runtime global', async () => {
+    projectGroupsScanNested.mockResolvedValue({
+      selectedPath: '/platform',
+      selectedPathKind: 'git_repo',
+      repos: [],
+      maxDepth: 3
+    } as never)
+    const store = createTestStore()
+    store.setState({ settings: { activeRuntimeEnvironmentId: 'env-1' } as never })
+
+    await store.getState().scanNestedRepos('/platform', undefined, {
+      runtimeEnvironmentId: null
+    })
+
+    expect(projectGroupsScanNested).toHaveBeenCalledWith({
+      path: '/platform',
+      connectionId: undefined,
+      scanId: undefined
+    })
+    expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
+  })
+
   it('moves local repos to a group using the preload projectId contract', async () => {
     const movedRepo = { ...remoteRepo, projectGroupId: projectGroup.id, projectGroupOrder: 3 }
     projectGroupsMoveProject.mockResolvedValue(movedRepo)

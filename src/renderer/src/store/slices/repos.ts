@@ -125,6 +125,9 @@ type ProjectUpdate = ProjectUpdateArgs['updates']
 type NestedRepoScanControls = {
   scanId?: string
   onProgress?: (scan: NestedRepoScanResult) => void
+  // Why: route the scan by the intended host, not the global active runtime.
+  // Absent means fall back to the global (existing callers unchanged).
+  runtimeEnvironmentId?: string | null
 }
 
 export type FolderWorkspacePathStatusCacheEntry = {
@@ -1966,7 +1969,14 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
 
   scanNestedRepos: async (path, connectionId, controls) => {
     try {
-      const target = getActiveRuntimeTarget(get().settings)
+      const target = getActiveRuntimeTarget(
+        // Why: route by the intended host when the caller passes one, so a git
+        // server-path scan can't land on a divergent global runtime. Absent →
+        // fall back to the global (existing callers unchanged).
+        controls && 'runtimeEnvironmentId' in controls
+          ? { activeRuntimeEnvironmentId: controls.runtimeEnvironmentId ?? null }
+          : get().settings
+      )
       if (target.kind === 'local') {
         const unsubscribe =
           controls?.scanId && controls.onProgress

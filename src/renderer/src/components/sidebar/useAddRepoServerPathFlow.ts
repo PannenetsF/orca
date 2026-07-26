@@ -26,7 +26,6 @@ export function useAddRepoServerPathFlow({
   addRepoPath,
   closeModal,
   fetchWorktrees,
-  getNestedRepoRuntimeKind,
   scanNestedRepos,
   setActiveNestedScanId,
   setNestedScanInProgress,
@@ -42,11 +41,14 @@ export function useAddRepoServerPathFlow({
   ) => Promise<Repo | null>
   closeModal: () => void
   fetchWorktrees: (repoId: string, options?: { requireAuthoritative?: boolean }) => Promise<unknown>
-  getNestedRepoRuntimeKind: (connectionId: string | null) => NestedRepoTelemetryRuntimeKind
   scanNestedRepos: (
     path: string,
     connectionId?: string,
-    controls?: { scanId?: string; onProgress?: (scan: NestedRepoScanResult) => void }
+    controls?: {
+      scanId?: string
+      onProgress?: (scan: NestedRepoScanResult) => void
+      runtimeEnvironmentId?: string | null
+    }
   ) => Promise<NestedRepoScanResult | null>
   setActiveNestedScanId: (scanId: string | null) => void
   setNestedScanInProgress: (inProgress: boolean) => void
@@ -82,17 +84,23 @@ export function useAddRepoServerPathFlow({
       try {
         if (kind === 'git') {
           const attemptId = createNestedRepoTelemetryAttemptId()
-          const runtimeKind = getNestedRepoRuntimeKind(null)
+          // Why: the server-path step is runtime-only, so classify by the selected
+          // runtime — not the global, which can point elsewhere (or at local) and
+          // would flip streaming support and telemetry to the wrong host.
+          const runtimeKind: NestedRepoTelemetryRuntimeKind = activeRuntimeEnvironmentId?.trim()
+            ? 'runtime'
+            : 'local'
           const supportsStreamingScan = runtimeKind !== 'runtime'
           const scanId = supportsStreamingScan ? createNestedRepoScanId() : null
           if (scanId) {
             setActiveNestedScanId(scanId)
             setNestedScanInProgress(true)
           }
-          const scan = await scanNestedRepos(
-            path,
-            undefined,
-            scanId
+          const scan = await scanNestedRepos(path, undefined, {
+            // Why: route the scan by the selected runtime so a git server-path
+            // scan can't land on a divergent global runtime before the add.
+            runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null,
+            ...(scanId
               ? {
                   scanId,
                   onProgress: (progressScan) => {
@@ -114,8 +122,8 @@ export function useAddRepoServerPathFlow({
                     })
                   }
                 }
-              : undefined
-          )
+              : {})
+          })
           if (gen !== serverAddGenRef.current) {
             return
           }
@@ -182,7 +190,6 @@ export function useAddRepoServerPathFlow({
       addRepoPath,
       closeModal,
       fetchWorktrees,
-      getNestedRepoRuntimeKind,
       onGitRepoReady,
       scanNestedRepos,
       serverPath,

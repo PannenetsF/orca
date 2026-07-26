@@ -196,7 +196,6 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
     // Why: closes only after a folder add, which activates the folder workspace.
     closeModal: closeForFolderHandoff,
     fetchWorktrees,
-    getNestedRepoRuntimeKind,
     scanNestedRepos,
     setActiveNestedScanId,
     setNestedScanInProgress,
