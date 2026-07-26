@@ -50,7 +50,7 @@ export function useAddRepoServerPathFlow({
       runtimeEnvironmentId?: string | null
     }
   ) => Promise<NestedRepoScanResult | null>
-  setActiveNestedScanId: (scanId: string | null) => void
+  setActiveNestedScanId: (scanId: string | null, runtimeEnvironmentId?: string | null) => void
   setNestedScanInProgress: (inProgress: boolean) => void
   showNestedRepoReview: ShowNestedRepoReview
   onGitRepoReady: (repoId: string, source: AddRepoExistingWorkspaceSource) => Promise<void>
@@ -93,7 +93,7 @@ export function useAddRepoServerPathFlow({
           const supportsStreamingScan = runtimeKind !== 'runtime'
           const scanId = supportsStreamingScan ? createNestedRepoScanId() : null
           if (scanId) {
-            setActiveNestedScanId(scanId)
+            setActiveNestedScanId(scanId, activeRuntimeEnvironmentId ?? null)
             setNestedScanInProgress(true)
           }
           const scan = await scanNestedRepos(path, undefined, {

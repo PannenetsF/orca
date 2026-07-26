@@ -56,9 +56,13 @@ export function useAddRepoLocalFolderFlow({
   scanNestedRepos: (
     path: string,
     connectionId?: string,
-    controls?: { scanId?: string; onProgress?: (scan: NestedRepoScanResult) => void }
+    controls?: {
+      scanId?: string
+      onProgress?: (scan: NestedRepoScanResult) => void
+      runtimeEnvironmentId?: string | null
+    }
   ) => Promise<NestedRepoScanResult | null>
-  setActiveNestedScanId: (scanId: string | null) => void
+  setActiveNestedScanId: (scanId: string | null, runtimeEnvironmentId?: string | null) => void
   setNestedScanInProgress: (inProgress: boolean) => void
   showNestedRepoReview: ShowNestedRepoReview
   onGitRepoReady: (repoId: string, source: AddRepoExistingWorkspaceSource) => Promise<void>
@@ -102,9 +106,12 @@ export function useAddRepoLocalFolderFlow({
       try {
         const attemptId = createNestedRepoTelemetryAttemptId()
         const scanId = createNestedRepoScanId()
-        setActiveNestedScanId(scanId)
+        setActiveNestedScanId(scanId, null)
         setNestedScanInProgress(true)
         const scan = await scanNestedRepos(path, undefined, {
+          // Why: native-picker/dropped paths are always local; route the scan
+          // local explicitly so scan, cancel, and add all target the same host.
+          runtimeEnvironmentId: null,
           scanId,
           onProgress: (progressScan) => {
             if (

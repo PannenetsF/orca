@@ -1427,7 +1427,10 @@ export type RepoSlice = {
     connectionId?: string,
     controls?: NestedRepoScanControls
   ) => Promise<NestedRepoScanResult | null>
-  cancelNestedRepoScan: (scanId: string) => Promise<boolean>
+  cancelNestedRepoScan: (
+    scanId: string,
+    options?: { runtimeEnvironmentId?: string | null }
+  ) => Promise<boolean>
   importNestedRepos: (args: {
     parentPath: string
     groupName: string
@@ -1971,9 +1974,9 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
     try {
       const target = getActiveRuntimeTarget(
         // Why: route by the intended host when the caller passes one, so a git
-        // server-path scan can't land on a divergent global runtime. Absent →
-        // fall back to the global (existing callers unchanged).
-        controls && 'runtimeEnvironmentId' in controls
+        // server-path scan can't land on a divergent global runtime. Only null or
+        // a string is an explicit override; undefined falls back to the global.
+        controls?.runtimeEnvironmentId !== undefined
           ? { activeRuntimeEnvironmentId: controls.runtimeEnvironmentId ?? null }
           : get().settings
       )
@@ -2014,9 +2017,16 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
     }
   },
 
-  cancelNestedRepoScan: async (scanId) => {
+  cancelNestedRepoScan: async (scanId, options) => {
     try {
-      const target = getActiveRuntimeTarget(get().settings)
+      const target = getActiveRuntimeTarget(
+        // Why: cancel on the host the scan actually ran on — symmetric with
+        // scanNestedRepos. Only null or a string is an explicit override;
+        // undefined falls back to the global (existing callers unchanged).
+        options?.runtimeEnvironmentId !== undefined
+          ? { activeRuntimeEnvironmentId: options.runtimeEnvironmentId ?? null }
+          : get().settings
+      )
       if (target.kind !== 'local') {
         return false
       }

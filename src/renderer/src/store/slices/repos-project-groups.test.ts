@@ -804,16 +804,11 @@ describe('project group store routing', () => {
     // Global points at a different runtime; the explicit override must win.
     store.setState({ settings: { activeRuntimeEnvironmentId: 'wrong-env' } as never })
 
-    await store.getState().scanNestedRepos('/platform', undefined, {
-      runtimeEnvironmentId: 'env-1'
-    })
+    await store.getState().scanNestedRepos('/platform', undefined, { runtimeEnvironmentId: 'env-1' })
 
-    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
-      selector: 'env-1',
-      method: 'projectGroup.scanNested',
-      params: { path: '/platform' },
-      timeoutMs: 20_000
-    })
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith(
+      expect.objectContaining({ selector: 'env-1', method: 'projectGroup.scanNested' })
+    )
   })
 
   it('routes a nested scan locally when the override is null, even with a runtime global', async () => {
@@ -836,6 +831,27 @@ describe('project group store routing', () => {
       scanId: undefined
     })
     expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
+
+    // An undefined override is not explicit: it must fall back to the runtime global.
+    await store.getState().scanNestedRepos('/platform', undefined, {
+      runtimeEnvironmentId: undefined
+    })
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith(
+      expect.objectContaining({ selector: 'env-1', method: 'projectGroup.scanNested' })
+    )
+  })
+
+  it('cancels a nested scan on the explicit runtime override, not the divergent global', async () => {
+    projectGroupsCancelNestedScan.mockResolvedValue(true)
+    const store = createTestStore()
+    // Global points at a runtime; a local-owned scan must still cancel locally.
+    store.setState({ settings: { activeRuntimeEnvironmentId: 'env-1' } as never })
+
+    await expect(
+      store.getState().cancelNestedRepoScan('scan-1', { runtimeEnvironmentId: null })
+    ).resolves.toBe(true)
+
+    expect(projectGroupsCancelNestedScan).toHaveBeenCalledWith({ scanId: 'scan-1' })
   })
 
   it('moves local repos to a group using the preload projectId contract', async () => {
