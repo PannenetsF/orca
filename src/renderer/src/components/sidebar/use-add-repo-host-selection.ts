@@ -25,6 +25,7 @@ export function useAddRepoHostSelection({
   selectedHostId: ExecutionHostId
   selectedParsedHost: ReturnType<typeof parseExecutionHostId>
   selectedSshTargetId: string | null
+  selectedRuntimeEnvironmentId: string | null
   hostSelectorOpen: boolean
   setHostSelectorOpen: (open: boolean) => void
   handleSelectAddProjectHost: (hostId: ExecutionHostId) => Promise<void>
@@ -73,6 +74,8 @@ export function useAddRepoHostSelection({
   const selectedParsedHost = parseExecutionHostId(selectedHostId)
   const selectedSshTargetId =
     selectedParsedHost?.kind === 'ssh' ? selectedParsedHost.targetId : null
+  const selectedRuntimeEnvironmentId =
+    selectedParsedHost?.kind === 'runtime' ? selectedParsedHost.environmentId : null
 
   useEffect(() => {
     if (isOpen && !previousOpenRef.current) {
@@ -198,6 +201,7 @@ export function useAddRepoHostSelection({
     selectedHostId,
     selectedParsedHost,
     selectedSshTargetId,
+    selectedRuntimeEnvironmentId,
     hostSelectorOpen,
     setHostSelectorOpen,
     handleSelectAddProjectHost,

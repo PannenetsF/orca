@@ -22,6 +22,7 @@ type ShowNestedRepoReview = (args: {
 }) => void
 
 export function useAddRepoServerPathFlow({
+  activeRuntimeEnvironmentId,
   addRepoPath,
   closeModal,
   fetchWorktrees,
@@ -33,7 +34,12 @@ export function useAddRepoServerPathFlow({
   onGitRepoReady,
   setAddProjectBusyLabel
 }: {
-  addRepoPath: (path: string, kind?: 'git' | 'folder') => Promise<Repo | null>
+  activeRuntimeEnvironmentId: string | null | undefined
+  addRepoPath: (
+    path: string,
+    kind?: 'git' | 'folder',
+    options?: { runtimeEnvironmentId?: string | null }
+  ) => Promise<Repo | null>
   closeModal: () => void
   fetchWorktrees: (repoId: string, options?: { requireAuthoritative?: boolean }) => Promise<unknown>
   getNestedRepoRuntimeKind: (connectionId: string | null) => NestedRepoTelemetryRuntimeKind
@@ -138,7 +144,13 @@ export function useAddRepoServerPathFlow({
           }
         }
         setAddProjectBusyLabel(kind === 'git' ? 'Opening project...' : 'Opening folder...')
-        const repo = await addRepoPath(path, kind)
+        // Why: the server-path step is only reached with a runtime host selected, so
+        // route by that selected runtime — not the global active-runtime, which can
+        // point elsewhere (or at local) and would misroute the add off the host the
+        // user picked. Symmetric with the local-add flows fixed in #9541.
+        const repo = await addRepoPath(path, kind, {
+          runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null
+        })
         if (gen !== serverAddGenRef.current) {
           return
         }
@@ -166,6 +178,7 @@ export function useAddRepoServerPathFlow({
       }
     },
     [
+      activeRuntimeEnvironmentId,
       addRepoPath,
       closeModal,
       fetchWorktrees,

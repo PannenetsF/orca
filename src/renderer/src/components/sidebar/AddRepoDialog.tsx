@@ -76,10 +76,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
   })
 
   const hostSelection = useAddRepoHostSelection({ isOpen, setStep })
-  const selectedRuntimeEnvironmentId =
-    hostSelection.selectedParsedHost?.kind === 'runtime'
-      ? hostSelection.selectedParsedHost.environmentId
-      : null
+  const selectedRuntimeEnvironmentId = hostSelection.selectedRuntimeEnvironmentId
   const { showRemoteNestedRepoReview, trackRemoteNestedScanResult } = useAddRepoRemoteNestedScan({
     setActiveNestedScanId,
     showNestedRepoReview
@@ -194,6 +191,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
     resetServerPathFlow,
     handleAddServerPath
   } = useAddRepoServerPathFlow({
+    activeRuntimeEnvironmentId: selectedRuntimeEnvironmentId,
     addRepoPath,
     // Why: closes only after a folder add, which activates the folder workspace.
     closeModal: closeForFolderHandoff,
