@@ -50,4 +50,34 @@ describe('Claude terminal session option detection', () => {
       readClaudeSessionOptionsFromTerminalScreen('I recommend Opus 4.8 for this task.')
     ).toBeNull()
   })
+
+  it('recovers a custom model name that is not in the catalog', () => {
+    const screen =
+      '[1mClaude Code[0m v2.1.211\r\n' +
+      '[38;2;102;102;102mmy-custom-model with high effort · API Usage Billing\r\n' +
+      '~/repo'
+
+    // Custom models have no catalog options, so effort is intentionally dropped.
+    expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
+      model: 'my-custom-model'
+    })
+  })
+
+  it('recovers a custom model with no effort suffix', () => {
+    const screen = 'Claude Code v2.1.211\r\ncompany/internal-opus · API Usage Billing\r\n~/repo'
+
+    expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
+      model: 'company/internal-opus'
+    })
+  })
+
+  it('recovers a custom model when xterm joins the descriptor to the header', () => {
+    const screen =
+      '[?1049h[H▐▛███▜▌Claude Codev2.1.211\r\n' +
+      '▝▜█████▛▘acme-frontier with medium effort · API Usage Billing'
+
+    expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
+      model: 'acme-frontier'
+    })
+  })
 })
