@@ -199,6 +199,11 @@ export class GitHandler {
     return stdout
   }
 
+  /**
+   * Spawn `git clone` on the relay host, merging the forwarded proxy into the
+   * unattended git env (env only — never argv), and stream progress back over
+   * `git.cloneProgress`.
+   */
   private async spawnClone(
     args: string[],
     cwd: string,

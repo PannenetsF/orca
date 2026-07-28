@@ -61,6 +61,12 @@ export class SshGitProvider extends SshGitWorktreeProvider implements IGitProvid
     return result as { stdout: string; stderr: string }
   }
 
+  /**
+   * Clone a repo over the relay. `options.proxyUrl` / `options.proxyBypassRules`
+   * are forwarded to the remote `git.clone` so the clone routes through the
+   * desktop's configured proxy (the relay rebuilds env from the remote host and
+   * cannot otherwise see it). Omitted when no proxy is configured.
+   */
   async clone(
     args: string[],
     cwd: string,

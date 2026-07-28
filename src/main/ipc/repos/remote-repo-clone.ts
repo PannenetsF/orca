@@ -26,6 +26,11 @@ type ActiveRemoteCloneMetadata = {
 let activeRemoteClone: ActiveRemoteCloneMetadata | null = null
 const remoteCloneInFlightByPath = new Set<string>()
 
+/**
+ * Clone a repo onto an SSH host via the relay, forwarding the app's configured
+ * proxy so the remote clone routes through it (the relay rebuilds git env from
+ * the remote host and cannot see the desktop's proxy).
+ */
 export async function cloneRemoteRepo(
   store: Store,
   mainWindow: BrowserWindow,

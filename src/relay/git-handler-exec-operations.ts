@@ -18,6 +18,13 @@ export class GitHandlerExecOperations extends GitHandlerOperationContext {
     return this.maybeStreamResponse({ stdout, stderr }, params, context)
   }
 
+  /**
+   * Handle a `git.clone` RPC: validate the clone argv, then spawn git with the
+   * caller's forwarded proxy (`params.proxyUrl` / `params.proxyBypassRules`)
+   * applied as env only. Values are string-guarded here and re-derived through
+   * buildConfiguredProxyEnv, so a malformed value yields no proxy env rather
+   * than reaching git as an arbitrary string.
+   */
   async clone(params: Record<string, unknown>, context?: RequestContext) {
     const args = params.args as string[]
     const cwd = params.cwd as string
