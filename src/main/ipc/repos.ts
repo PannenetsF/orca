@@ -51,6 +51,7 @@ import {
   gitSpawnAfterWindowsEnvironmentReady,
   nonInteractiveGitEnv
 } from '../git/runner'
+import { gitCloneEnvWithProxy } from '../git/git-clone-proxy-env'
 import { isAbsolute, join, posix } from 'node:path'
 import {
   cleanupClaimedCloneTarget,
@@ -536,12 +537,18 @@ async function cloneRemoteRepo(
     // Why: match local clone by creating the parent first, or a fresh remote parent surfaces as spawn ENOENT.
     await fsProvider.createDir(trimmedDestination)
     // Why: the SSH relay runs git argv, not a shell; use the repo folder name so git creates it under the chosen parent.
+    const settings = store.getSettings()
     await gitProvider.clone(
       ['clone', '--progress', '--', args.url.trim(), repoName],
       trimmedDestination,
       {
         signal: controller.signal,
         timeoutMs: 10 * 60_000,
+        // Why: forward the configured proxy so the remote clone routes through it (the relay can't see the desktop's proxy env).
+        ...(settings.httpProxyUrl?.trim() ? { proxyUrl: settings.httpProxyUrl.trim() } : {}),
+        ...(settings.httpProxyBypassRules?.trim()
+          ? { proxyBypassRules: settings.httpProxyBypassRules.trim() }
+          : {}),
         onProgress: (progress) => {
           if (!mainWindow.isDestroyed()) {
             mainWindow.webContents.send('repos:clone-progress', progress)
@@ -2428,7 +2435,8 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
             {
               cwd: args.destination,
               // Why: without this, an auth-needing clone pops Git Credential Manager's OAuth window on Windows, unclosable in a restricted env (issue #7652).
-              env: nonInteractiveGitEnv(),
+              // Why: honor the app's configured proxy so clones route through it like other Orca network children.
+              env: gitCloneEnvWithProxy(nonInteractiveGitEnv(), store.getSettings()),
               signal: pendingController.signal,
               stdio: ['ignore', 'ignore', 'pipe']
             }

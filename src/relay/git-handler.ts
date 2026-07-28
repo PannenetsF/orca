@@ -73,6 +73,7 @@ import {
   removeSafeUntrackedDiscardTargets
 } from '../shared/git-discard-path-safety'
 import { getGitCloneFailureMessage } from '../shared/git-clone-failure-message'
+import { buildConfiguredProxyEnv } from '../shared/network-proxy'
 import { syncForkDefaultBranch, validateGitForkSyncExpectedUpstream } from '../shared/git-fork-sync'
 import { InFlightPromiseDedupe, stableInFlightKey } from '../shared/in-flight-promise-dedupe'
 import { GIT_FETCH_SKIP_AUTO_MAINTENANCE_CONFIG_ARGS } from '../shared/git-fetch-auto-maintenance'
@@ -1243,8 +1244,14 @@ export class GitHandler {
     if (args[0] !== 'clone') {
       throw new Error('git.clone only supports clone commands.')
     }
+    // Why: normalizeProxyUrl already validated the scheme desktop-side; still
+    // build env via buildConfiguredProxyEnv so a malformed value simply yields
+    // no proxy keys rather than reaching git as an arbitrary string.
+    const proxyUrl = typeof params.proxyUrl === 'string' ? params.proxyUrl : undefined
+    const proxyBypassRules =
+      typeof params.proxyBypassRules === 'string' ? params.proxyBypassRules : undefined
     return await this.runWithGitReadCacheClear(() =>
-      this.spawnClone(args, cwd, progressId, context)
+      this.spawnClone(args, cwd, progressId, { proxyUrl, proxyBypassRules }, context)
     )
   }
 
@@ -1252,12 +1259,17 @@ export class GitHandler {
     args: string[],
     cwd: string,
     progressId: string,
+    proxy: { proxyUrl?: string; proxyBypassRules?: string },
     context?: RequestContext
   ): Promise<{ stdout: string; stderr: string }> {
+    const proxyEnv = buildConfiguredProxyEnv({
+      httpProxyUrl: proxy.proxyUrl,
+      httpProxyBypassRules: proxy.proxyBypassRules
+    })
     return await new Promise((resolve, reject) => {
       const child = spawn('git', args, {
         cwd: expandTilde(cwd),
-        env: buildRelayUnattendedGitEnv(),
+        env: { ...buildRelayUnattendedGitEnv(), ...proxyEnv },
         stdio: ['ignore', 'pipe', 'pipe']
       })
       let stdout = ''
