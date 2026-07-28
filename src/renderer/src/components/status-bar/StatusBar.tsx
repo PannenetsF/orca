@@ -67,6 +67,8 @@ import { formatRateLimitWindowChipLabel } from '@/lib/window-label-formatter'
 import { useResetCountdownClock } from '@/hooks/useResetCountdownClock'
 import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
+import { SkillUpdateStatusSegment } from './SkillUpdateStatusSegment'
+import { RemoteServerUpdateStatusSegment } from './RemoteServerUpdateStatusSegment'
 import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { getVisibleUsageProvider, isUsageEmptyState } from './status-bar-provider-visibility'
 import { StatusBarUsageEmptyCta } from './StatusBarUsageEmptyCta'
@@ -1465,7 +1467,12 @@ export function CodexSwitcherMenu({
       if (previousActiveAccountId !== nextActiveAccountId) {
         await markLiveCodexSessionsForRestart({
           previousAccountLabel: getCodexAccountLabel(accountState, previousActiveAccountId),
-          nextAccountLabel: getCodexAccountLabel(next, nextActiveAccountId)
+          nextAccountLabel: getCodexAccountLabel(next, nextActiveAccountId),
+          // Why: the mutation wrote this row's slot only, so panes on any other
+          // lane still launch under the account they already had.
+          target,
+          // Why: clearing a distro-less WSL row nulls every distro slot at once.
+          clearsEveryWslDistro: accountId === null
         })
         // Why: collapse to the summary row (not close) so the follow-up "restart open tabs" prompt appears in the same flow.
         if (mountedRef.current) {
@@ -2343,6 +2350,8 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
       <div className="flex-1" />
 
       <div className="flex items-center gap-3">
+        <RemoteServerUpdateStatusSegment iconOnly={iconOnly} />
+        <SkillUpdateStatusSegment iconOnly={iconOnly} />
         <UpdateStatusSegment compact={compact} iconOnly={iconOnly} />
         <React.Suspense fallback={null}>
           {petEnabled ? <PetStatusSegment /> : null}
