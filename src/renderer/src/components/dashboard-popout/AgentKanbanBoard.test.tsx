@@ -2,8 +2,9 @@
 
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { DashboardCard, DashboardSnapshot } from '../../../../shared/dashboard-snapshot'
+import type { RepoIcon } from '../../../../shared/repo-icon'
 import { AgentKanbanBoard } from './AgentKanbanBoard'
 
 // Stub the card and dialog so the board test stays free of xterm / Radix
@@ -11,15 +12,21 @@ import { AgentKanbanBoard } from './AgentKanbanBoard'
 vi.mock('./AgentKanbanCard', () => ({
   AgentKanbanCard: ({
     card,
+    repoIcon,
+    now,
     onOpenTerminal
   }: {
     card: DashboardCard
+    repoIcon?: RepoIcon | null
+    now: number
     onOpenTerminal: (card: DashboardCard) => void
   }) => (
     <div
       data-testid="card"
       data-bucket={card.bucket}
       data-unseen={card.unseen}
+      data-now={now}
+      data-repo-icon={repoIcon === null ? 'none' : JSON.stringify(repoIcon)}
       onClick={() => onOpenTerminal(card)}
     >
       {card.worktreeName}
@@ -60,14 +67,18 @@ function card(overrides: Partial<DashboardCard>): DashboardCard {
     repoName: 'Repo',
     worktreeName: 'wt',
     startedAt: 0,
+    finishedAt: null,
     stateChangedAt: 0,
     unseen: false,
     ...overrides
   }
 }
 
-function renderBoard(cards: DashboardCard[]): void {
-  const snapshot: DashboardSnapshot = { generatedAt: 1, cards }
+function renderBoard(
+  cards: DashboardCard[],
+  repoIconsByRepoId?: Record<string, RepoIcon | null>
+): void {
+  const snapshot: DashboardSnapshot = { generatedAt: 1, cards, repoIconsByRepoId }
   render(<AgentKanbanBoard snapshot={snapshot} />)
 }
 
@@ -80,7 +91,9 @@ describe('AgentKanbanBoard', () => {
   })
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     vi.clearAllMocks()
+    vi.restoreAllMocks()
   })
 
   it('renders the three fixed columns in order', () => {
@@ -102,6 +115,30 @@ describe('AgentKanbanBoard', () => {
     expect(screen.getByText('3 total')).toBeTruthy()
   })
 
+  it('leaves every column border neutral now that cards carry the state color', () => {
+    renderBoard([card({ bucket: 'attention' })])
+    for (const column of document.querySelectorAll('section')) {
+      expect(column.className).toContain('border-border/60')
+      expect(column.className).not.toContain('amber')
+    }
+  })
+
+  it('routes each card its own repo icon', () => {
+    renderBoard(
+      [
+        card({ repoId: 'r1', worktreeName: 'from-r1' }),
+        card({ repoId: 'r2', worktreeName: 'from-r2' }),
+        card({ repoId: 'r3', worktreeName: 'from-r3' })
+      ],
+      { r1: { type: 'lucide', name: 'Rocket' }, r2: null }
+    )
+
+    expect(screen.getByText('from-r1').dataset.repoIcon).toBe('{"type":"lucide","name":"Rocket"}')
+    expect(screen.getByText('from-r2').dataset.repoIcon).toBe('none')
+    // Unknown repo → the card's own default glyph, never another repo's icon.
+    expect(screen.getByText('from-r3').dataset.repoIcon).toBe('none')
+  })
+
   it('shows "None" for empty columns', () => {
     renderBoard([card({ bucket: 'working' })])
     // attention and idle are empty → two "None" placeholders.
@@ -116,6 +153,47 @@ describe('AgentKanbanBoard', () => {
     ])
     const names = screen.getAllByTestId('card').map((c) => c.textContent)
     expect(names).toEqual(['new-move', 'mid-move', 'old-move'])
+  })
+
+  it('does not start the clock when no card renders a relative timestamp', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+
+    const { rerender } = render(<AgentKanbanBoard snapshot={{ generatedAt: 1, cards: [] }} />)
+    expect(vi.getTimerCount()).toBe(0)
+
+    rerender(
+      <AgentKanbanBoard
+        snapshot={{ generatedAt: 2, cards: [card({ startedAt: 0, finishedAt: null })] }}
+      />
+    )
+    const initialNow = screen.getByTestId('card').dataset.now
+
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => vi.advanceTimersByTime(30_000))
+    expect(screen.getByTestId('card').dataset.now).toBe(initialNow)
+  })
+
+  it('parks the clock while hidden, catches up on reveal, and ticks while visible', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    let visibilityState: DocumentVisibilityState = 'hidden'
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibilityState)
+
+    renderBoard([card({ startedAt: 1 })])
+    expect(screen.getByTestId('card').dataset.now).toBe('100000')
+    expect(vi.getTimerCount()).toBe(0)
+
+    act(() => vi.advanceTimersByTime(60_000))
+    expect(screen.getByTestId('card').dataset.now).toBe('100000')
+
+    visibilityState = 'visible'
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(screen.getByTestId('card').dataset.now).toBe('160000')
+    expect(vi.getTimerCount()).toBe(1)
+
+    act(() => vi.advanceTimersByTime(30_000))
+    expect(screen.getByTestId('card').dataset.now).toBe('190000')
   })
 
   it('keeps the terminal dialog open across bucket moves and card removal', () => {
