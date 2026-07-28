@@ -51,6 +51,7 @@ import {
   gitSpawnAfterWindowsEnvironmentReady,
   nonInteractiveGitEnv
 } from '../git/runner'
+import { parseGitCloneProgress } from '../../shared/git-clone-progress'
 import { isAbsolute, join, posix } from 'node:path'
 import {
   cleanupClaimedCloneTarget,
@@ -792,14 +793,11 @@ const MAX_COMPLETED_NESTED_SCAN_RESULTS = 50
 const GIT_AVAILABILITY_TIMEOUT_MS = 1500
 
 function emitCloneProgressFromText(mainWindow: BrowserWindow, text: string): void {
-  for (const line of text.split(/[\r\n]+/)) {
-    const match = line.match(/^([\w\s]+):\s+(\d+)%/)
-    if (match && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('repos:clone-progress', {
-        phase: match[1].trim(),
-        percent: Number.parseInt(match[2], 10)
-      })
-    }
+  if (mainWindow.isDestroyed()) {
+    return
+  }
+  for (const progress of parseGitCloneProgress(text)) {
+    mainWindow.webContents.send('repos:clone-progress', progress)
   }
 }
 
