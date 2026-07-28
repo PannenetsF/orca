@@ -22,6 +22,7 @@ import type {
 } from '@/lib/pane-manager/pane-manager'
 import TerminalSearch from '@/components/TerminalSearch'
 import type { PtyTransport } from './pty-transport'
+import type { PtyTransportRecoveryState } from './pty-transport-types'
 import { fitPanes, isWindowsUserAgent } from './pane-helpers'
 import { getConnectionId, getConnectionIdFromState } from '@/lib/connection-context'
 import {
@@ -34,7 +35,6 @@ import {
   selectRuntimeAwareSshTargetRemoved
 } from '@/store/slices/runtime-environment-ssh'
 import { hydrateRuntimeEnvironmentSshState } from '@/runtime/runtime-environment-ssh-state'
-import { isPairedWebClientWindow } from '@/lib/desktop-window-chrome'
 import { handleInternalTerminalFileDrop } from './terminal-drop-handler'
 import { recordTerminalUserInputForLeaf } from './terminal-input-activity'
 import {
@@ -56,13 +56,18 @@ import { useEffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/use-effective-
 import { useTerminalFontZoom } from './useTerminalFontZoom'
 import CloseTerminalDialog, { type CloseTerminalDialogCopyKind } from './CloseTerminalDialog'
 import { MobileDriverOverlay } from './MobileDriverOverlay'
-import { TerminalErrorToast } from './TerminalErrorToast'
+import { stripSshReconnectOwnedErrorLines, TerminalErrorToast } from './TerminalErrorToast'
 import { TerminalSessionStateSaveFailureDialog } from './TerminalSessionStateSaveFailureDialog'
 import TerminalContextMenu from './TerminalContextMenu'
-import TerminalPaneHeaderOverlay from './TerminalPaneHeaderOverlay'
+import TerminalPaneHeaderOverlay, { type PaneTitleOverlayRect } from './TerminalPaneHeaderOverlay'
+import {
+  arePaneTitleOverlayRectsEqual,
+  clearPaneTitleOverlayRects
+} from './pane-title-overlay-rects'
 import NativeChatView from '../native-chat/NativeChatView'
 import { splitTerminalPaneWithInheritedCwd } from './terminal-pane-split-with-inherited-cwd'
 import { TerminalAgentSessionForkDialog } from './TerminalAgentSessionForkDialog'
+import { AgentSessionContinuationDialog } from '@/components/agent-session-continuation/AgentSessionContinuationDialog'
 import { SessionRestoredBannerPortals } from './SessionRestoredBannerPortals'
 import { useSessionRestoredBannerDismiss } from './useSessionRestoredBannerDismiss'
 import {
@@ -71,7 +76,8 @@ import {
   pruneSessionRestoredBannerPaneIds,
   removeSessionRestoredBannerPaneId,
   syncSessionRestoredBannerTitleSpace,
-  type SessionRestoredBannerDismissEvent
+  type SessionRestoredBannerDismissEvent,
+  type SessionRestoredBannerReason
 } from './session-restored-banner-pane-state'
 import { useSystemPrefersDark } from './use-system-prefers-dark'
 import { useTerminalPaneGlobalEffects } from './use-terminal-pane-global-effects'
@@ -83,6 +89,7 @@ import {
   resolveTerminalTabStripDropTarget
 } from './terminal-pane-tab-detach'
 import type { PreparedAgentSessionFork } from './terminal-agent-session-fork'
+import type { AgentSessionContinuationRequest } from '@/lib/agent-session-continuation'
 import { useNotificationDispatch } from './use-notification-dispatch'
 import { connectPanePty } from './pty-connection'
 import { resolveTerminalLayoutActiveLeafId } from './terminal-layout-leaf-ids'
@@ -122,8 +129,13 @@ import {
   closeWebRuntimeTerminal,
   updateWebRuntimePaneLayout
 } from '@/runtime/web-runtime-session'
-import { isPrimarySelectionEnabled, readPrimarySelectionText } from '@/lib/primary-selection'
+import {
+  armPrimarySelectionNativePasteSuppression,
+  isPrimarySelectionEnabled,
+  readPrimarySelectionText
+} from '@/lib/primary-selection'
 import { APP_MENU_PASTE_EVENT } from '@/lib/app-menu-paste'
+import { CODEX_ACCOUNT_RESTART_STARTUP } from '@/lib/codex-session-restart'
 import { WORKSPACE_FILE_PATH_MIME, WORKSPACE_FILE_PATHS_MIME } from '@/lib/workspace-file-drag'
 import { isTerminalSessionStateSaveFailure } from '../../../../shared/terminal-session-state-save-failure'
 import { isTerminalZeroDimensionsDiagnostic } from '../../../../shared/terminal-zero-dimensions-diagnostic'
@@ -151,11 +163,26 @@ import {
 } from '@/components/terminal-quick-commands/TerminalQuickCommandDialog'
 import { keybindingMatchesAction } from '../../../../shared/keybindings'
 import { pasteTerminalClipboard } from './terminal-clipboard-paste'
+import {
+  firesNativePasteEvent,
+  getClipboardEventText,
+  isClipboardEventPasteRequired
+} from './terminal-clipboard-event-paste'
+import {
+  assertClipboardTextWithinLimitWithYield,
+  type ReadClipboardTextOptions
+} from '../../../../shared/clipboard-text'
 import { scheduleImagePasteWebglAtlasRecovery } from './terminal-webgl-atlas-recovery'
 import { restoreTerminalFitToDesktop, restoreTerminalFitsToDesktop } from './terminal-fit-restore'
 import { useVisibleTerminalTabClaim } from './use-visible-terminal-tab-claim'
 import { TerminalSshReconnectOverlay } from './TerminalSshReconnectOverlay'
+import { TerminalRemoteRuntimeReconnectBanner } from './TerminalRemoteRuntimeReconnectBanner'
 import { selectTerminalTabAgentTypesByLeaf } from './terminal-tab-agent-type-index'
+import { canContinueAgentSessionInNewSession } from './terminal-agent-session-continuation'
+import {
+  updateTerminalRemoteRuntimeRecoveryUiState,
+  type VisiblePtyRecoveryState
+} from './terminal-remote-runtime-recovery-ui-state'
 
 const NATIVE_CHAT_ROOT_SELECTOR = '[data-native-chat-root="true"]'
 
@@ -214,12 +241,7 @@ type TerminalPaneProps = {
   showSplitButton?: boolean
   onPtyExit: (ptyId: string) => void
   onCloseTab: () => void
-}
-
-type PaneTitleOverlayRect = {
-  left: number
-  top: number
-  width: number
+  onInitialRenderSettled?: () => void
 }
 
 type TerminalQuickCommandEditorDialogProps = {
@@ -252,24 +274,6 @@ function formatClipboardImagePasteError(error: unknown): string {
   return `Image paste failed: ${detail}`
 }
 
-function arePaneTitleOverlayRectsEqual(
-  a: Record<number, PaneTitleOverlayRect>,
-  b: Record<number, PaneTitleOverlayRect>
-): boolean {
-  const aKeys = Object.keys(a)
-  const bKeys = Object.keys(b)
-  if (aKeys.length !== bKeys.length) {
-    return false
-  }
-  return aKeys.every((key) => {
-    const paneId = Number(key)
-    const left = Math.abs((a[paneId]?.left ?? 0) - (b[paneId]?.left ?? 0))
-    const top = Math.abs((a[paneId]?.top ?? 0) - (b[paneId]?.top ?? 0))
-    const width = Math.abs((a[paneId]?.width ?? 0) - (b[paneId]?.width ?? 0))
-    return left < 0.5 && top < 0.5 && width < 0.5
-  })
-}
-
 export default function TerminalPane({
   tabId,
   worktreeId,
@@ -280,7 +284,8 @@ export default function TerminalPane({
   isolatedPaneKey = null,
   showSplitButton = true,
   onPtyExit,
-  onCloseTab
+  onCloseTab,
+  onInitialRenderSettled
 }: TerminalPaneProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const managerRef = useRef<PaneManager | null>(null)
@@ -309,6 +314,8 @@ export default function TerminalPane({
   const isRendererVisible = isVisible && isWorktreeActive
   const isVisibleRef = useRef(isRendererVisible)
   isVisibleRef.current = isRendererVisible
+  const onInitialRenderSettledRef = useRef(onInitialRenderSettled)
+  onInitialRenderSettledRef.current = onInitialRenderSettled
   const sshReconnectTargetId = useAppStore((store) => {
     const connectionId = getConnectionIdFromState(store, worktreeId)
     // Why: runtime-owned SSH targets are internal plumbing users can't connect to, so a reconnect prompt would mislead.
@@ -321,11 +328,8 @@ export default function TerminalPane({
     isNativeChatTranscriptLocalReadable(getConnectionIdFromState(store, worktreeId))
   )
   // Which machine's SSH store this target belongs to: a remote server's per-environment bucket, or null for this machine's local SSH maps.
-  // Why: paired web clients force null — they mirror their one host through the local maps, not an explicit environment bucket.
   const sshReconnectEnvironmentId = useAppStore((store) =>
-    sshReconnectTargetId && !isPairedWebClientWindow()
-      ? getExplicitRuntimeEnvironmentIdForWorktree(store, worktreeId)
-      : null
+    sshReconnectTargetId ? getExplicitRuntimeEnvironmentIdForWorktree(store, worktreeId) : null
   )
   const sshReconnectStatus = useAppStore((store) =>
     sshReconnectTargetId
@@ -375,7 +379,12 @@ export default function TerminalPane({
   // Why: each Add action starts with a fresh draft so the terminal menu doesn't reuse cancelled quick-command text.
   const [quickCommandDraft, setQuickCommandDraft] = useState(createTerminalQuickCommandDraft)
   const [agentSessionFork, setAgentSessionFork] = useState<PreparedAgentSessionFork | null>(null)
+  const [agentSessionContinuation, setAgentSessionContinuation] =
+    useState<AgentSessionContinuationRequest | null>(null)
   const [terminalError, setTerminalError] = useState<string | null>(null)
+  const [ptyRecoveryStatesByPaneId, setPtyRecoveryStatesByPaneId] = useState<
+    Record<number, VisiblePtyRecoveryState>
+  >({})
   const [sessionStateSaveFailureOpen, setSessionStateSaveFailureOpen] = useState(false)
   const daemonActions = useDaemonActions()
   // Why: override state lives in a Map for perf; this counter forces a re-render on override change so the mobile-fit banner toggles.
@@ -558,6 +567,13 @@ export default function TerminalPane({
     }
     setTerminalError((prev) => (prev ? `${prev}\n${message}` : message))
   })
+  const onPtyRecoveryStateRef = useRef(
+    (paneId: number, state: PtyTransportRecoveryState | null) => {
+      setPtyRecoveryStatesByPaneId((previous) =>
+        updateTerminalRemoteRuntimeRecoveryUiState(previous, paneId, state)
+      )
+    }
+  )
 
   const setTabPaneExpanded = useAppStore((store) => store.setTabPaneExpanded)
   const setTabCanExpandPane = useAppStore((store) => store.setTabCanExpandPane)
@@ -779,9 +795,9 @@ export default function TerminalPane({
   const [shouldMeasureHiddenStartup, setShouldMeasureHiddenStartup] = useState(
     () => startup !== undefined && !isVisible
   )
-  const [sessionRestoredBannerPaneIds, setSessionRestoredBannerPaneIds] = useState<Set<number>>(
-    () => new Set()
-  )
+  const [sessionRestoredBannerPaneIds, setSessionRestoredBannerPaneIds] = useState<
+    Map<number, SessionRestoredBannerReason>
+  >(() => new Map())
   const consumeTabStartupCommand = useAppStore((store) => store.consumeTabStartupCommand)
   const [setupSplit] = useState(() => useAppStore.getState().pendingSetupSplitByTabId[tabId])
   const consumeTabSetupSplit = useAppStore((store) => store.consumeTabSetupSplit)
@@ -813,12 +829,15 @@ export default function TerminalPane({
     })
   }, [])
 
-  const showRestoredSessionBanner = useCallback((paneId: number): void => {
-    setSessionRestoredBannerPaneIds((prev) => {
-      const next = addSessionRestoredBannerPaneId(prev, paneId)
-      return next === prev ? prev : next
-    })
-  }, [])
+  const showRestoredSessionBanner = useCallback(
+    (paneId: number, reason: SessionRestoredBannerReason = 'restored'): void => {
+      setSessionRestoredBannerPaneIds((prev) => {
+        const next = addSessionRestoredBannerPaneId(prev, paneId, reason)
+        return next === prev ? prev : next
+      })
+    },
+    []
+  )
 
   const dismissSessionRestoredBanner = useCallback(
     (event: SessionRestoredBannerDismissEvent): void => {
@@ -1406,8 +1425,10 @@ export default function TerminalPane({
     onPtyExitRef,
     onAgentExitedRef,
     onPtyErrorRef,
+    onPtyRecoveryStateRef,
     clearTabPtyId,
     consumeSuppressedPtyExit: useAppStore((store) => store.consumeSuppressedPtyExit),
+    isPtyShutdownPending: useAppStore((store) => store.isPtyShutdownPending),
     updateTabTitle,
     setRuntimePaneTitle,
     clearRuntimePaneTitle,
@@ -1434,7 +1455,8 @@ export default function TerminalPane({
     setPaneCount,
     setPaneLayoutRevision,
     resolveExternalPaneDropTarget,
-    onExternalPaneDrop: handleExternalPaneDrop
+    onExternalPaneDrop: handleExternalPaneDrop,
+    onInitialRenderSettledRef
   })
 
   useEffect(() => {
@@ -1597,7 +1619,7 @@ export default function TerminalPane({
         tabId,
         worktreeId,
         cwd,
-        startup: { command: 'codex' },
+        startup: CODEX_ACCOUNT_RESTART_STARTUP,
         paneTransportsRef,
         paneMode2031Ref,
         paneKittyKeyboardModesRef,
@@ -1608,8 +1630,10 @@ export default function TerminalPane({
         onPtyExitRef,
         onAgentExitedRef,
         onPtyErrorRef,
+        onPtyRecoveryStateRef,
         clearTabPtyId,
         consumeSuppressedPtyExit: useAppStore.getState().consumeSuppressedPtyExit,
+        isPtyShutdownPending: useAppStore.getState().isPtyShutdownPending,
         updateTabTitle,
         setRuntimePaneTitle,
         clearRuntimePaneTitle,
@@ -1656,6 +1680,11 @@ export default function TerminalPane({
     ]
   )
 
+  // Why leaf bindings are a dep: a parked or deferred tab mounts with no
+  // transport, so a queued restart has no ptyId to match on the mount pass. The
+  // reconnected PTY rewrites this map when it binds — `ptyIdsByTabId` does not,
+  // because a restored id is already listed there before the pane ever mounts.
+  const panePtyLayoutBindings = savedLayout.ptyIdsByLeafId
   useEffect(() => {
     const manager = managerRef.current
     if (!manager) {
@@ -1672,7 +1701,12 @@ export default function TerminalPane({
         handleRestartCodexPane(pane.id)
       }
     }
-  }, [consumePendingCodexPaneRestart, handleRestartCodexPane, pendingCodexPaneRestartIds])
+  }, [
+    consumePendingCodexPaneRestart,
+    handleRestartCodexPane,
+    panePtyLayoutBindings,
+    pendingCodexPaneRestartIds
+  ])
 
   useTerminalFontZoom({ isActive, containerRef, managerRef, paneFontSizesRef, settingsRef })
 
@@ -1720,6 +1754,7 @@ export default function TerminalPane({
     managerRef,
     containerRef,
     paneTransportsRef,
+    panePtyBindingsRef,
     isActiveRef,
     isVisibleRef,
     toggleExpandPane
@@ -1979,7 +2014,9 @@ export default function TerminalPane({
 
     const pasteFromClipboard = (
       pane: ManagedPane,
-      source: Extract<TerminalPasteSource, 'keyboard' | 'paste-event'>
+      source: Extract<TerminalPasteSource, 'keyboard' | 'paste-event'>,
+      readClipboardText: (options?: ReadClipboardTextOptions) => Promise<string> = window.api.ui
+        .readClipboardText
     ): void => {
       const connectionId = getConnectionId(worktreeId) ?? null
       const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(
@@ -1988,7 +2025,7 @@ export default function TerminalPane({
       )
       const activeElementAtDispatch = document.activeElement
       void pasteTerminalClipboard({
-        readClipboardText: window.api.ui.readClipboardText,
+        readClipboardText,
         saveClipboardImageAsTempFile: window.api.ui.saveClipboardImageAsTempFile,
         connectionId,
         runtimeEnvironmentId,
@@ -2042,6 +2079,13 @@ export default function TerminalPane({
         }
         return
       }
+      if (isClipboardEventPasteRequired() && firesNativePasteEvent(e, isMac)) {
+        // Why: without navigator.clipboard the chord's native paste event is the
+        // only clipboard access — let its default fire and handle it in onPaste.
+        // A remapped chord (e.g. Ctrl+Y) fires no paste event, so keep consuming it
+        // below instead of letting xterm encode it to the PTY as a raw control char.
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       const manager = managerRef.current
@@ -2090,6 +2134,13 @@ export default function TerminalPane({
       }
       const pane = manager.getActivePane() ?? manager.getPanes()[0]
       if (!pane) {
+        return
+      }
+      if (isClipboardEventPasteRequired()) {
+        const eventText = getClipboardEventText(e)
+        pasteFromClipboard(pane, 'paste-event', (options) =>
+          assertClipboardTextWithinLimitWithYield(eventText, options)
+        )
         return
       }
       pasteFromClipboard(pane, 'paste-event')
@@ -2216,7 +2267,7 @@ export default function TerminalPane({
     const manager = managerRef.current
     const container = containerRef.current
     if (!manager || !container) {
-      setPaneTitleOverlayRects({})
+      setPaneTitleOverlayRects(clearPaneTitleOverlayRects)
       return
     }
     const containerRect = container.getBoundingClientRect()
@@ -2241,7 +2292,7 @@ export default function TerminalPane({
     const manager = managerRef.current
     const container = containerRef.current
     if (!manager || !container) {
-      setPaneTitleOverlayRects({})
+      setPaneTitleOverlayRects(clearPaneTitleOverlayRects)
       return
     }
 
@@ -2482,6 +2533,7 @@ export default function TerminalPane({
     onClearPaneTitle: handleClearPaneTitleShortcut,
     onPasteError: setTerminalError,
     onAgentSessionForkReady: setAgentSessionFork,
+    onAgentSessionContinuationReady: setAgentSessionContinuation,
     forceBracketedMultilineTextPaste,
     rightClickToPaste
   })
@@ -2604,6 +2656,10 @@ export default function TerminalPane({
       }
       event.preventDefault()
       event.stopPropagation()
+      // Why: preventDefault on mousedown does not stop Chromium's native
+      // middle-click paste follow-up, so arm the shared window to swallow it and
+      // avoid inserting text into the PTY twice.
+      armPrimarySelectionNativePasteSuppression()
       clickedPane.terminal.focus()
       void readPrimarySelectionText().then(async (text) => {
         if (!text) {
@@ -2677,6 +2733,10 @@ export default function TerminalPane({
       ) {
         event.preventDefault()
         event.stopPropagation()
+        // Why: auxclick fires at button release, when Chromium's native paste is
+        // imminent; re-arm here so a slow release past the mousedown window still
+        // swallows the follow-up paste.
+        armPrimarySelectionNativePasteSuppression()
       }
     },
     [getPrimarySelectionMiddleClickPane]
@@ -2756,6 +2816,18 @@ export default function TerminalPane({
     sshReconnectStatus &&
     sshReconnectStatus !== 'connected'
   )
+  // Why: while the reconnect banner owns recovery, strip only the SSH-owned lines from the
+  // (possibly aggregated) error, so a later successful connect can't flash the raw ssh:connect
+  // failure and any unrelated error still surfaces after reconnect.
+  useEffect(() => {
+    if (!showSshReconnectOverlay || terminalError == null) {
+      return
+    }
+    const kept = stripSshReconnectOwnedErrorLines(terminalError)
+    if (kept !== terminalError) {
+      setTerminalError(kept)
+    }
+  }, [showSshReconnectOverlay, terminalError])
   const menuPaneHasCustomTitle =
     contextMenu.menuPaneId !== null && Boolean(paneTitles[contextMenu.menuPaneId])
   const chatLeafStillMounted = chatLeafId
@@ -2795,6 +2867,27 @@ export default function TerminalPane({
   })
   const activePaneIsChatLeaf = Boolean(
     isChatViewMode && activePane?.leafId && activePane.leafId === chatLeafId
+  )
+  // A split can host different agents, so continuation resolves the specific leaf before using tab-wide hints.
+  const resolveAgentForLeaf = (leafId: string | null): string | null => {
+    const detectedAgent = leafId ? (tabAgentTypeByLeaf[leafId] ?? null) : null
+    if (detectedAgent) {
+      return detectedAgent
+    }
+    return (
+      nativeChatLaunchAgentForLeaf({
+        launchAgent: terminalTab?.launchAgent,
+        launchAgentLeafId: getTabWideAgentHintLeafId(),
+        leafId,
+        leafIds: getNativeChatLeafIds()
+      }) ?? resolveTitleAgentForLeaf(leafId)
+    )
+  }
+  const activePaneCanContinueInNewSession = canContinueAgentSessionInNewSession(
+    resolveAgentForLeaf(activePane?.leafId ?? null)
+  )
+  const contextMenuCanContinueInNewSession = canContinueAgentSessionInNewSession(
+    resolveAgentForLeaf(contextMenuLeafId)
   )
   // Each toggle gates on its own leaf (header=active, menu=opened-over), so mixed splits show it only where chat can render.
   const activePaneCanToggleChat = canToggleChatForLeaf(activePane?.leafId ?? null)
@@ -2845,23 +2938,32 @@ export default function TerminalPane({
           })
         }}
       />
-      {terminalError && isActive && (
+      {/* Why: the reconnect banner already owns SSH recovery UX; the z-50 error
+          toast was painting over it (same bottom strip) with the raw ssh:connect failure. */}
+      {terminalError && isActive && !showSshReconnectOverlay ? (
         <TerminalErrorToast
           error={terminalError}
           onDismiss={() => setTerminalError(null)}
           onRestartDaemon={() => daemonActions.setPending('restart')}
         />
-      )}
-      {showSshReconnectOverlay && sshReconnectTargetId && sshReconnectStatus ? (
-        <TerminalSshReconnectOverlay
-          targetId={sshReconnectTargetId}
-          targetLabel={sshReconnectTargetLabel}
-          status={sshReconnectStatus}
-          targetRemoved={sshReconnectTargetRemoved}
-          worktreeId={worktreeId}
-          sshOwnerEnvironmentId={sshReconnectEnvironmentId}
-        />
       ) : null}
+      {/* Why: portal into the pane so the banner stacks above the xterm canvas (sibling mount painted under WebGL). */}
+      {showSshReconnectOverlay && sshReconnectTargetId && sshReconnectStatus
+        ? managedPanes.map((pane) =>
+            createPortal(
+              <TerminalSshReconnectOverlay
+                targetId={sshReconnectTargetId}
+                targetLabel={sshReconnectTargetLabel}
+                status={sshReconnectStatus}
+                targetRemoved={sshReconnectTargetRemoved}
+                worktreeId={worktreeId}
+                sshOwnerEnvironmentId={sshReconnectEnvironmentId}
+              />,
+              pane.container,
+              `ssh-reconnect-${pane.id}`
+            )
+          )
+        : null}
       <DaemonActionDialog api={daemonActions} />
       {isActive && (
         <TerminalSessionStateSaveFailureDialog
@@ -2905,6 +3007,14 @@ export default function TerminalPane({
                   isPaneExpanded: expandedPaneId === chatPane.id,
                   onToggleExpand: () =>
                     contextMenu.runForPane(chatPane.id, contextMenu.onToggleExpand),
+                  canContinueAgentSessionInNewSession: canContinueAgentSessionInNewSession(
+                    resolveAgentForLeaf(chatPane.leafId)
+                  ),
+                  onContinueAgentSessionInNewSession: () =>
+                    contextMenu.runForPane(
+                      chatPane.id,
+                      contextMenu.onContinueAgentSessionInNewSession
+                    ),
                   onForkAgentSession: () =>
                     void contextMenu.runForPane(chatPane.id, contextMenu.onForkAgentSession),
                   onSetTitle: () => contextMenu.runForPane(chatPane.id, contextMenu.onSetTitle),
@@ -2940,6 +3050,8 @@ export default function TerminalPane({
         onEqualizePaneSizes={contextMenu.onEqualizePaneSizes}
         onClosePane={contextMenu.onClosePane}
         onClearScreen={contextMenu.onClearScreen}
+        canContinueAgentSessionInNewSession={contextMenuCanContinueInNewSession}
+        onContinueAgentSessionInNewSession={contextMenu.onContinueAgentSessionInNewSession}
         onForkAgentSession={() => void contextMenu.onForkAgentSession()}
         canToggleNativeChat={contextMenuCanToggleChat}
         isNativeChatView={contextMenuIsChatView}
@@ -2978,6 +3090,17 @@ export default function TerminalPane({
           }
         }}
       />
+      {agentSessionContinuation ? (
+        <AgentSessionContinuationDialog
+          open
+          request={agentSessionContinuation}
+          onOpenChange={(open) => {
+            if (!open) {
+              setAgentSessionContinuation(null)
+            }
+          }}
+        />
+      ) : null}
       <TerminalPaneHeaderOverlay
         tabId={tabId}
         worktreeId={worktreeId}
@@ -3001,6 +3124,10 @@ export default function TerminalPane({
         canToggleNativeChat={activePaneCanToggleChat}
         isChatViewMode={activePaneIsChatLeaf}
         onToggleNativeChat={handleToggleNativeChat}
+        canContinueAgentSessionInNewSession={activePaneCanContinueInNewSession}
+        onContinueAgentSessionInNewSession={(pane) =>
+          contextMenu.runForPane(pane.id, contextMenu.onContinueAgentSessionInNewSession)
+        }
         onSplitPane={splitTerminalPaneFromHeader}
         onBeginPaneDrag={beginPaneDragFromHeader}
         onActivatePaneTitleInteraction={activatePaneTitleInteraction}
@@ -3013,6 +3140,25 @@ export default function TerminalPane({
         onRenameCancel={handleRenameCancel}
         onRenameBlur={handleRenameBlur}
       />
+      {!showSshReconnectOverlay
+        ? managedPanes.map((pane) => {
+            const recoveryState = ptyRecoveryStatesByPaneId[pane.id]
+            if (!recoveryState) {
+              return null
+            }
+            return createPortal(
+              <TerminalRemoteRuntimeReconnectBanner
+                key={`remote-runtime-reconnect-${pane.id}-${recoveryState.epoch}`}
+                phase={recoveryState.phase}
+                onReconnect={() => {
+                  paneTransportsRef.current.get(pane.id)?.retryRecovery?.()
+                }}
+              />,
+              pane.container,
+              `remote-runtime-reconnect-${pane.id}`
+            )
+          })
+        : null}
       {managedPanes.map((pane) => {
         // Why: pane IDs collide across tabs, so key overlays by the transport's actual ptyId to avoid wrong-pane banners.
         const ptyId = paneTransportsRef.current.get(pane.id)?.getPtyId()

@@ -1,4 +1,4 @@
-import type { IDisposable, IParser, ITheme } from '@xterm/xterm'
+import type { ITheme } from '@xterm/xterm'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
 import type { GlobalSettings } from '../../../../shared/types'
 import { resolveTerminalFontWeights } from '../../../../shared/terminal-fonts'
@@ -9,7 +9,6 @@ import {
   resolveEffectiveTerminalAppearance
 } from '@/lib/terminal-theme'
 import { buildFontFamily } from './layout-serialization'
-import { guardParserHandler } from './terminal-parser-handler-guard'
 import { safeFit, safeFitAndThen } from '@/lib/pane-manager/pane-tree-ops'
 import {
   normalizeTerminalFastScrollSensitivity,
@@ -24,57 +23,7 @@ import type { TerminalViewAttributes } from '../../../../shared/terminal-view-at
 import { publishTerminalViewAttributes } from './terminal-view-attributes-publisher'
 import { normalizeTerminalLineHeight } from '../../../../shared/terminal-line-height-settings'
 import { maybePushMode2031Flip } from './terminal-mode-2031-replies'
-
-// Why Pick over a hand-rolled type: stays tied to xterm's canonical signature so upstream tightening surfaces here.
-type Mode2031Parser = Pick<IParser, 'registerCsiHandler'>
-
-type Mode2031HandlerDeps = {
-  paneId: number
-  parser: Mode2031Parser
-  /** Called when a real (non-replayed) `CSI ?2031h` arrives, after the subscribe flag is set.
-   *  A callback so the lifecycle hook keeps its transport-aware `pushMode2031ForPane` closure. */
-  onSubscribe: () => void
-  isReplaying: () => boolean
-  paneMode2031: Map<number, boolean>
-  paneLastThemeMode: Map<number, 'dark' | 'light'>
-}
-
-// Why a pure function: lets tests drive a real xterm parser end-to-end against the "random characters on restart" guard.
-export function installMode2031Handlers(deps: Mode2031HandlerDeps): IDisposable[] {
-  const hasMode2031 = (params: (number | number[])[]): boolean =>
-    params.some((p) => (Array.isArray(p) ? p.includes(2031) : p === 2031))
-
-  // Why return false: we only observe mode 2031; false lets xterm's built-in DEC handler still process compound sequences.
-  return [
-    deps.parser.registerCsiHandler(
-      { prefix: '?', final: 'h' },
-      guardParserHandler('csi-mode2031-subscribe', (params) => {
-        if (hasMode2031(params)) {
-          // Why gate on isReplaying: a restored buffer's replayed `?2031h` would push `?997;1n` into a fresh shell with no
-          // TUI, which echoes it as literal text; pty-connection's guard covers only xterm auto-replies, not handler sends.
-          // Return early (before recording the subscribe bit) so a later theme flip won't push into a shell that isn't subscribed.
-          if (deps.isReplaying()) {
-            return false
-          }
-          deps.paneMode2031.set(deps.paneId, true)
-          deps.onSubscribe()
-        }
-        return false
-      })
-    ),
-    // Why no replay guard here: we only push CSI 997 on subscribe; unsubscribe just clears map entries, so replay is harmless.
-    deps.parser.registerCsiHandler(
-      { prefix: '?', final: 'l' },
-      guardParserHandler('csi-mode2031-unsubscribe', (params) => {
-        if (hasMode2031(params)) {
-          deps.paneMode2031.delete(deps.paneId)
-          deps.paneLastThemeMode.delete(deps.paneId)
-        }
-        return false
-      })
-    )
-  ]
-}
+import { resolveTerminalMinimumContrastRatio } from '@/lib/terminal-contrast-correction'
 
 export function hexToRgba(hex: string, alpha: number): string {
   let clean = hex.replace('#', '')
@@ -206,6 +155,16 @@ export function applyTerminalAppearance(
     // Why value-gated: writing options.theme rebuilds the palette, discarding TUI OSC 4/10/11/12 mutations; skip on no-op change.
     if (theme && !composedTerminalThemesEqual(pane.terminal.options.theme, theme)) {
       pane.terminal.options.theme = theme
+    }
+    // Gate off the configured theme background; the live OSC-11 background is deliberately preserved by the
+    // theme write above, so a TUI that repaints its background at runtime won't re-gate (known limitation).
+    // Why value-gated: writing minimumContrastRatio clears xterm's contrast cache, so skip on no-op re-applies.
+    const minimumContrastRatio = resolveTerminalMinimumContrastRatio(
+      theme?.background,
+      appearance.mode
+    )
+    if (pane.terminal.options.minimumContrastRatio !== minimumContrastRatio) {
+      pane.terminal.options.minimumContrastRatio = minimumContrastRatio
     }
     // Why clear explicitly: allowTransparency has rendering cost and a stale `true` could bleed in from a prior opacity.
     pane.terminal.options.allowTransparency =

@@ -48,6 +48,8 @@ import type {
   RateLimitRuntimeTarget,
   RateLimitWindow
 } from '../../../../shared/rate-limit-types'
+import { resolveLocalAccountRuntimeTarget } from '../../../../shared/local-account-runtime'
+import { getRendererAppPlatform } from '../../lib/renderer-app-platform'
 import {
   ProviderIcon,
   ProviderPanel,
@@ -65,6 +67,8 @@ import { formatRateLimitWindowChipLabel } from '@/lib/window-label-formatter'
 import { useResetCountdownClock } from '@/hooks/useResetCountdownClock'
 import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
+import { SkillUpdateStatusSegment } from './SkillUpdateStatusSegment'
+import { RemoteServerUpdateStatusSegment } from './RemoteServerUpdateStatusSegment'
 import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { getVisibleUsageProvider, isUsageEmptyState } from './status-bar-provider-visibility'
 import { StatusBarUsageEmptyCta } from './StatusBarUsageEmptyCta'
@@ -208,17 +212,24 @@ function toCodexStatusRuntimeTarget(
 
 export function getStatusBarPreferredWslDistro(
   settings: GlobalSettings | null | undefined,
-  wslDistros: string[]
+  wslDistros: string[],
+  platform: NodeJS.Platform = getRendererAppPlatform()
 ): string | null {
-  const configuredDistro = settings?.localAccountWslDistro?.trim() || null
-  if (configuredDistro) {
-    return configuredDistro
+  if (settings) {
+    const target = resolveLocalAccountRuntimeTarget(settings, platform)
+    if (target.runtime === 'wsl' && target.wslDistro) {
+      return target.wslDistro
+    }
   }
   return wslDistros.length === 1 ? wslDistros[0] : null
 }
 
 function shouldIncludeSettingsWslRuntime(settings: GlobalSettings | null | undefined): boolean {
-  return settings?.localAccountRuntime === 'wsl'
+  if (!settings) {
+    return false
+  }
+  // Why: the fallback group must match the concrete runtime used for account polling.
+  return resolveLocalAccountRuntimeTarget(settings, getRendererAppPlatform()).runtime === 'wsl'
 }
 
 function getSingleConcreteCodexWslDistro(state: CodexRateLimitAccountsState): string | null {
@@ -1456,7 +1467,12 @@ export function CodexSwitcherMenu({
       if (previousActiveAccountId !== nextActiveAccountId) {
         await markLiveCodexSessionsForRestart({
           previousAccountLabel: getCodexAccountLabel(accountState, previousActiveAccountId),
-          nextAccountLabel: getCodexAccountLabel(next, nextActiveAccountId)
+          nextAccountLabel: getCodexAccountLabel(next, nextActiveAccountId),
+          // Why: the mutation wrote this row's slot only, so panes on any other
+          // lane still launch under the account they already had.
+          target,
+          // Why: clearing a distro-less WSL row nulls every distro slot at once.
+          clearsEveryWslDistro: accountId === null
         })
         // Why: collapse to the summary row (not close) so the follow-up "restart open tabs" prompt appears in the same flow.
         if (mountedRef.current) {
@@ -2334,6 +2350,8 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
       <div className="flex-1" />
 
       <div className="flex items-center gap-3">
+        <RemoteServerUpdateStatusSegment iconOnly={iconOnly} />
+        <SkillUpdateStatusSegment iconOnly={iconOnly} />
         <UpdateStatusSegment compact={compact} iconOnly={iconOnly} />
         <React.Suspense fallback={null}>
           {petEnabled ? <PetStatusSegment /> : null}

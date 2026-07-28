@@ -21,6 +21,7 @@ const SNAPSHOT = {
       repoName: 'Orca',
       worktreeName: 'Dashboard',
       startedAt: 1_699_999_000_000,
+      finishedAt: null,
       stateChangedAt: 1_699_999_500_000,
       unseen: true,
       askSummary: '{"question":"Proceed?"}'
@@ -45,6 +46,56 @@ describe('dashboard payload validation', () => {
       isDashboardSnapshot({
         ...SNAPSHOT,
         cards: [{ ...SNAPSHOT.cards[0], lastAgentMessage: 'x'.repeat(8_001) }]
+      })
+    ).toBe(false)
+  })
+
+  it('accepts repo icons a pop-out can safely render, and rejects the rest', () => {
+    expect(
+      isDashboardSnapshot({
+        ...SNAPSHOT,
+        repoIconsByRepoId: {
+          'repo-1': { type: 'lucide', name: 'Rocket' },
+          'repo-2': null,
+          'repo-3': {
+            type: 'image',
+            src: 'https://github.com/anthropics.png?size=64',
+            source: 'github'
+          }
+        }
+      })
+    ).toBe(true)
+    // Absent entirely: a pop-out on older code still gets its snapshot.
+    expect(isDashboardSnapshot({ ...SNAPSHOT, repoIconsByRepoId: undefined })).toBe(true)
+
+    expect(
+      isDashboardSnapshot({
+        ...SNAPSHOT,
+        repoIconsByRepoId: {
+          'repo-1': { type: 'image', src: 'javascript:alert(1)', source: 'file' }
+        }
+      })
+    ).toBe(false)
+    expect(
+      isDashboardSnapshot({
+        ...SNAPSHOT,
+        repoIconsByRepoId: { 'repo-1': { type: 'nonsense' } }
+      })
+    ).toBe(false)
+    expect(isDashboardSnapshot({ ...SNAPSHOT, repoIconsByRepoId: [] })).toBe(false)
+  })
+
+  it('bounds the conversation name', () => {
+    expect(
+      isDashboardSnapshot({
+        ...SNAPSHOT,
+        cards: [{ ...SNAPSHOT.cards[0], conversationName: 'Sparse-checkout parser' }]
+      })
+    ).toBe(true)
+    expect(
+      isDashboardSnapshot({
+        ...SNAPSHOT,
+        cards: [{ ...SNAPSHOT.cards[0], conversationName: 'x'.repeat(1_025) }]
       })
     ).toBe(false)
   })
