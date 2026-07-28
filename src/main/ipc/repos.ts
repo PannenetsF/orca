@@ -479,6 +479,11 @@ function getRemoteRepoFolderName(remotePath: string): string {
   return trimmed.split(/[\\/]/).at(-1) || remotePath
 }
 
+/**
+ * Clone a repo onto an SSH host via the relay, forwarding the app's configured
+ * proxy so the remote clone routes through it (the relay rebuilds git env from
+ * the remote host and cannot see the desktop's proxy).
+ */
 async function cloneRemoteRepo(
   store: Store,
   mainWindow: BrowserWindow,
