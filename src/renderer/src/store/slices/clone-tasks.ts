@@ -55,7 +55,7 @@ export type CloneTaskSlice = {
   updateCloneTaskProgress: (
     match:
       | { taskId: string }
-      | { backend: CloneTaskBackend; destination: string }
+      | { backend: CloneTaskBackend; destination: string; environmentId?: string }
       | { localOrSsh: true },
     progress: { phase: string; percent: number }
   ) => void
@@ -110,7 +110,7 @@ export const createCloneTaskSlice: StateCreator<AppState, [], [], CloneTaskSlice
           ? s.cloneTasksById[match.taskId]
           : 'localOrSsh' in match
             ? findActiveLocalOrSshCloneTask(s.cloneTasksById)
-            : findActiveCloneTask(s.cloneTasksById, match.backend, match.destination)
+            : findActiveCloneTask(s.cloneTasksById, match.backend, match.destination, match.environmentId)
       if (!entry || entry.status !== 'cloning') {
         return {}
       }
@@ -166,16 +166,20 @@ function removeCloneTask(
   })
 }
 
-// Why: local/ssh clones are serialized in the main process, so at most one is
-// in flight per backend — match the single active task by destination.
+// Why: env clones aren't serialized, so a shared destination needs environmentId to disambiguate.
 function findActiveCloneTask(
   tasksById: Record<string, CloneTask>,
   backend: CloneTaskBackend,
-  destination: string
+  destination: string,
+  environmentId?: string
 ): CloneTask | undefined {
   const trimmed = destination.trim()
   return Object.values(tasksById).find(
-    (task) => task.status === 'cloning' && task.backend === backend && task.destination === trimmed
+    (task) =>
+      task.status === 'cloning' &&
+      task.backend === backend &&
+      task.destination === trimmed &&
+      (environmentId === undefined || task.environmentId === environmentId)
   )
 }
 

@@ -99,7 +99,7 @@ export function registerRuntimeClientIpcBridge(
       useAppStore
         .getState()
         .updateCloneTaskProgress(
-          { backend: 'environment', destination: event.destination },
+          { backend: 'environment', destination: event.destination, environmentId },
           { phase: event.phase, percent: event.percent }
         )
       return
