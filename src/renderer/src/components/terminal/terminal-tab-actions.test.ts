@@ -544,11 +544,19 @@ describe('closeTerminalTab', () => {
   })
 
   function makePinnedTabState(
-    overrides: { confirmClosePinnedTab: boolean } & Record<string, unknown>
+    overrides: { confirmClosePinnedTab: boolean; confirmCloseAnyTab?: boolean } & Record<
+      string,
+      unknown
+    >
   ): Record<string, unknown> {
-    const { confirmClosePinnedTab, ...rest } = overrides
+    const {
+      confirmClosePinnedTab,
+      confirmCloseAnyTab = false,
+      isPinned = true,
+      ...rest
+    } = overrides
     return {
-      settings: { activeRuntimeEnvironmentId: null, confirmClosePinnedTab },
+      settings: { activeRuntimeEnvironmentId: null, confirmClosePinnedTab, confirmCloseAnyTab },
       tabsByWorktree: {},
       unifiedTabsByWorktree: {
         'wt-1': [
@@ -565,7 +573,7 @@ describe('closeTerminalTab', () => {
             sortOrder: 0,
             createdAt: 0,
             isPreview: false,
-            isPinned: true
+            isPinned
           }
         ]
       },
@@ -706,6 +714,74 @@ describe('closeTerminalTab', () => {
     expect(requestPinnedTabCloseConfirm).not.toHaveBeenCalled()
     expect(closeTab).toHaveBeenCalledWith('pinned-entity-1', { reason: undefined })
     expect(closeUnifiedTab).not.toHaveBeenCalled()
+  })
+
+  it('routes an unpinned terminal through the guard when confirmCloseAnyTab is on and userInitiated', () => {
+    const requestPinnedTabCloseConfirm = vi.fn()
+    const closeTab = vi.fn()
+    getStateMock.mockReturnValue(
+      makePinnedTabState({
+        confirmClosePinnedTab: true,
+        confirmCloseAnyTab: true,
+        isPinned: false,
+        requestPinnedTabCloseConfirm,
+        closeTab
+      })
+    )
+
+    closeTerminalTab('pinned-entity-1', { userInitiated: true })
+
+    expect(closeTab).not.toHaveBeenCalled()
+    expect(requestPinnedTabCloseConfirm).toHaveBeenCalledTimes(1)
+    expect(requestPinnedTabCloseConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabLabel: 'Server',
+        variant: 'any',
+        onConfirm: expect.any(Function)
+      })
+    )
+  })
+
+  it('does not prompt for confirmCloseAnyTab when the close is not user-initiated', () => {
+    const requestPinnedTabCloseConfirm = vi.fn()
+    const closeTab = vi.fn()
+    getStateMock.mockReturnValue(
+      makePinnedTabState({
+        confirmClosePinnedTab: true,
+        confirmCloseAnyTab: true,
+        isPinned: false,
+        requestPinnedTabCloseConfirm,
+        closeTab
+      })
+    )
+
+    // Why: autonomous/bulk closes (e.g. a parked tab's PTY exit) omit userInitiated
+    // and must never open the confirm-any dialog for a tab the user isn't closing.
+    closeTerminalTab('pinned-entity-1')
+
+    expect(requestPinnedTabCloseConfirm).not.toHaveBeenCalled()
+    expect(closeTab).toHaveBeenCalledWith('pinned-entity-1', { reason: undefined })
+  })
+
+  it('still prompts for a pinned tab even when the close is not user-initiated', () => {
+    const requestPinnedTabCloseConfirm = vi.fn()
+    const closeTab = vi.fn()
+    getStateMock.mockReturnValue(
+      makePinnedTabState({
+        confirmClosePinnedTab: true,
+        confirmCloseAnyTab: false,
+        isPinned: true,
+        requestPinnedTabCloseConfirm,
+        closeTab
+      })
+    )
+
+    // Why: a parked pinned tab's autonomous PTY exit must keep the pinned confirmation.
+    closeTerminalTab('pinned-entity-1')
+
+    expect(closeTab).not.toHaveBeenCalled()
+    expect(requestPinnedTabCloseConfirm).toHaveBeenCalledTimes(1)
+    expect(requestPinnedTabCloseConfirm.mock.calls[0][0]).toMatchObject({ variant: 'pinned' })
   })
 
   it('threads the PTY-exit reason through to closeTab', () => {
