@@ -2912,7 +2912,7 @@ type ResolvedWorktreeInFlight = {
 // events after it — idempotent, no duplicate local pushes.
 export type MobileNotificationDispatchEvent = {
   type: 'notification'
-  source: 'agent-task-complete' | 'terminal-bell' | 'test' | 'plugin'
+  source: 'agent-task-complete' | 'terminal-bell' | 'test' | 'plugin' | 'clone-complete'
   title: string
   body: string
   worktreeId?: string
