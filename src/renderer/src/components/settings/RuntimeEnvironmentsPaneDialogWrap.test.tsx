@@ -86,7 +86,9 @@ const settings = {
   activeRuntimeEnvironmentId: null
 } as unknown as GlobalSettings
 
-async function renderPane(): Promise<HTMLDivElement> {
+async function renderPane(
+  setActiveRuntimeEnvironmentPreference = vi.fn().mockResolvedValue(true)
+): Promise<HTMLDivElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -96,7 +98,7 @@ async function renderPane(): Promise<HTMLDivElement> {
       <TooltipProvider>
         <RuntimeEnvironmentsPane
           settings={settings}
-          setActiveRuntimeEnvironmentPreference={vi.fn().mockResolvedValue(true)}
+          setActiveRuntimeEnvironmentPreference={setActiveRuntimeEnvironmentPreference}
         />
       </TooltipProvider>
     )
@@ -214,5 +216,37 @@ describe('RuntimeEnvironmentsPane confirmation dialogs with a long endpoint', ()
     expect(labelLine.textContent).toBe(ENVIRONMENT.name)
     expect(labelLine.className).toContain('break-all')
     expect(labelLine.className).not.toContain('truncate')
+  })
+
+  it('lets the Switch Server dialog wrap an error message with a long token', async () => {
+    const failure = `switch failed for ${UNBREAKABLE_ENDPOINT}`
+    const container = await renderPane(vi.fn().mockRejectedValue(new Error(failure)))
+    await vi.waitFor(() => expect(container.textContent).toContain(ENVIRONMENT.name))
+
+    const option = container.querySelector(`[data-select-item="${ENVIRONMENT.id}"]`)
+    expect(option).not.toBeNull()
+    await act(async () => {
+      option?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const confirmButton = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find(
+      (button) => button.textContent?.trim() === 'Switch'
+    )
+    expect(confirmButton).toBeDefined()
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // The label line holds ENVIRONMENT.name, so filtering by the endpoint token targets the error <p>.
+    const error = await vi.waitFor(() => {
+      const node = [...document.querySelectorAll('[data-slot="dialog-content"] p')].find((p) =>
+        p.textContent?.includes(UNBREAKABLE_ENDPOINT)
+      )
+      if (!node) {
+        throw new Error('error message not rendered')
+      }
+      return node
+    })
+    expect(error.className).toContain('break-all')
   })
 })
