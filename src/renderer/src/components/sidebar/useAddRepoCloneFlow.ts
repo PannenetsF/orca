@@ -160,7 +160,7 @@ export function useAddRepoCloneFlow({
     const environmentId =
       backend === 'environment'
         ? (trimmedEnvironmentId ??
-          useAppStore.getState().settings.activeRuntimeEnvironmentId?.trim() ??
+          useAppStore.getState().settings?.activeRuntimeEnvironmentId?.trim() ??
           undefined)
         : undefined
     navigatedTaskRef.current = null
