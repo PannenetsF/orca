@@ -153,10 +153,7 @@ export function useAddRepoCloneFlow({
       backend = 'ssh'
     } else if (
       trimmedEnvironmentId ||
-      getActiveRuntimeTarget({
-        ...useAppStore.getState().settings,
-        activeRuntimeEnvironmentId: null
-      }).kind === 'environment'
+      getActiveRuntimeTarget(useAppStore.getState().settings).kind === 'environment'
     ) {
       backend = 'environment'
     }

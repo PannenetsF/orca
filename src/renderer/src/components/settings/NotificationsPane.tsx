@@ -171,7 +171,7 @@ export function NotificationsPane({
         )}
         description={translate(
           'auto.components.settings.NotificationsPane.cloneCompleteDescription',
-          'A background repository clone finishes.'
+          'A background repository clone has finished.'
         )}
         checked={notificationSettings.cloneComplete}
         disabled={!notificationSettings.enabled}
