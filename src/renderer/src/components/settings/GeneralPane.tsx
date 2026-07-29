@@ -141,6 +141,32 @@ export function GeneralPane({
             }
           />
         </SearchableSetting>
+        <SearchableSetting
+          title={translate(
+            'auto.components.settings.GeneralPane.confirm_close_any_title',
+            'Confirm before closing any tab'
+          )}
+          description={translate(
+            'auto.components.settings.GeneralPane.confirm_close_any_description',
+            'Show a confirmation dialog before any tab is closed.'
+          )}
+          keywords={['tab', 'confirm', 'close', 'any', 'all']}
+        >
+          <SettingsSwitchRow
+            label={translate(
+              'auto.components.settings.GeneralPane.confirm_close_any_title',
+              'Confirm before closing any tab'
+            )}
+            description={translate(
+              'auto.components.settings.GeneralPane.confirm_close_any_description',
+              'Show a confirmation dialog before any tab is closed.'
+            )}
+            checked={settings.confirmCloseAnyTab ?? false}
+            onChange={() =>
+              updateSettings({ confirmCloseAnyTab: !(settings.confirmCloseAnyTab ?? false) })
+            }
+          />
+        </SearchableSetting>
       </section>
     ) : null,
     matchesSettingsSearch(searchQuery, getGeneralWorkspaceSearchEntries()) ? (

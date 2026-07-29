@@ -22,6 +22,7 @@ import {
   isWebRuntimeSessionActive
 } from '../../runtime/web-runtime-session'
 import { closeTerminalTab } from '../terminal/terminal-tab-actions'
+import { guardTabClose, resolveTabLabel } from '../../store/tab-close-guard'
 import { openTabBarEntry, type TabCreateEntryArgs } from '../tab-bar/tab-create-entry-action'
 import { openMobileEmulatorTab } from '@/lib/open-mobile-emulator-tab'
 import { ensureSimulatorTab, getSimulatorTabForWorktree } from '@/lib/ensure-simulator-tab'
@@ -222,7 +223,7 @@ export function useTabGroupWorkspaceModel({
   }, [setActiveWorktree, worktreeId])
 
   const closeItem = useCallback(
-    (itemId: string, opts?: { skipEmptyCheck?: boolean }) => {
+    (itemId: string, opts?: { skipEmptyCheck?: boolean; userInitiated?: boolean }) => {
       const item = groupTabs.find((candidate) => candidate.id === itemId)
       if (!item) {
         return
@@ -230,48 +231,72 @@ export function useTabGroupWorkspaceModel({
       if (item.isPinned) {
         return
       }
-      const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(
-        useAppStore.getState(),
-        worktreeId
-      )
+      // Why: single-tab close gestures default to user-initiated; only these open
+      // the confirm-any-tab dialog. Bulk callers (close-all, empty-group) opt out.
+      const userInitiated = opts?.userInitiated ?? true
       if (item.contentType === 'terminal') {
-        closeTerminalTab(item.entityId)
+        // Why: closeTerminalTab owns the pinned/confirm-any close guards for terminals.
+        closeTerminalTab(item.entityId, { userInitiated })
         if (!opts?.skipEmptyCheck) {
           leaveWorktreeIfEmpty()
         }
         return
       }
-      if (item.contentType === 'browser') {
-        const browserState = useAppStore.getState()
-        const hasLocalPages = (browserState.browserPagesByWorkspace[item.entityId] ?? []).length > 0
-        // Why: host-close a remote-owned browser or a pageless host-mirror (else un-closable); local fallbacks have pages so stay local.
-        const shouldCloseOnHost =
-          isWebRuntimeSessionActive(runtimeEnvironmentId) &&
-          (browserWorkspaceHasRemoteOwner(browserState, item.entityId, runtimeEnvironmentId) ||
-            !hasLocalPages)
-        if (shouldCloseOnHost) {
-          void closeWebRuntimeSessionTab({
-            worktreeId,
-            tabId: item.id,
-            environmentId: runtimeEnvironmentId,
-            reason: 'user'
-          })
+      const performClose = (): void => {
+        if (item.contentType === 'browser') {
+          const browserState = useAppStore.getState()
+          const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(browserState, worktreeId)
+          const hasLocalPages =
+            (browserState.browserPagesByWorkspace[item.entityId] ?? []).length > 0
+          // Why: host-close a remote-owned browser or a pageless host-mirror (else un-closable); local fallbacks have pages so stay local.
+          const shouldCloseOnHost =
+            isWebRuntimeSessionActive(runtimeEnvironmentId) &&
+            (browserWorkspaceHasRemoteOwner(browserState, item.entityId, runtimeEnvironmentId) ||
+              !hasLocalPages)
+          if (shouldCloseOnHost) {
+            void closeWebRuntimeSessionTab({
+              worktreeId,
+              tabId: item.id,
+              environmentId: runtimeEnvironmentId,
+              reason: 'user'
+            })
+          }
+          destroyWorkspaceWebviews(browserState.browserPagesByWorkspace, item.entityId)
+          closeBrowserTab(item.entityId)
+          closeUnifiedTab(item.id)
+        } else if (item.contentType === 'simulator') {
+          closeUnifiedTab(item.id)
+        } else {
+          const canCloseTab = closeEditorIfUnreferenced(item.entityId, item.id)
+          if (!canCloseTab) {
+            return
+          }
+          closeUnifiedTab(item.id)
         }
-        destroyWorkspaceWebviews(browserState.browserPagesByWorkspace, item.entityId)
-        closeBrowserTab(item.entityId)
-        closeUnifiedTab(item.id)
-      } else if (item.contentType === 'simulator') {
-        closeUnifiedTab(item.id)
-      } else {
-        const canCloseTab = closeEditorIfUnreferenced(item.entityId, item.id)
-        if (!canCloseTab) {
-          return
+        if (!opts?.skipEmptyCheck) {
+          leaveWorktreeIfEmpty()
         }
-        closeUnifiedTab(item.id)
       }
-      if (!opts?.skipEmptyCheck) {
-        leaveWorktreeIfEmpty()
+      // Why: dirty editors already prompt via the save/discard dialog, so don't double-prompt.
+      const isDirtyEditor =
+        item.contentType !== 'browser' &&
+        item.contentType !== 'simulator' &&
+        (useAppStore.getState().openFiles.find((file) => file.id === item.entityId)?.isDirty ??
+          false)
+      if (
+        userInitiated &&
+        !isDirtyEditor &&
+        (useAppStore.getState().settings?.confirmCloseAnyTab ?? false)
+      ) {
+        guardTabClose({
+          isPinned: false,
+          tabLabel: resolveTabLabel(useAppStore.getState(), worktreeId, item.id),
+          userInitiated: true,
+          onClose: performClose
+        })
+        return
       }
+      performClose()
     },
     [
       closeBrowserTab,
@@ -472,7 +497,7 @@ export function useTabGroupWorkspaceModel({
       (item) => item.groupId === groupId
     )
     for (const item of items) {
-      closeItem(item.id, { skipEmptyCheck: true })
+      closeItem(item.id, { skipEmptyCheck: true, userInitiated: false })
     }
     // Why: closing tabs doesn't remove the group shell; empty split groups are layout state, collapse the placeholder pane here.
     closeEmptyGroup(worktreeId, groupId)
@@ -487,7 +512,7 @@ export function useTabGroupWorkspaceModel({
         item.contentType === 'conflict-review' ||
         item.contentType === 'check-details'
       ) {
-        closeItem(item.id)
+        closeItem(item.id, { userInitiated: false })
       }
     }
   }, [closeItem, groupTabs])

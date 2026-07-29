@@ -109,9 +109,9 @@ const mocks = vi.hoisted(() => ({
     options?.onClosed?.()
   }),
   closeUnifiedTab: vi.fn(),
-  // Models pinned-tab-close-guard.guardPinnedTabClose: unpinned closes run onClose immediately;
+  // Models tab-close-guard.guardTabClose: unpinned closes run onClose immediately;
   // pinned closes are deferred to a confirm dialog (assert isPinned via the mock's args).
-  guardPinnedTabClose: vi.fn((options: { isPinned: boolean; onClose: () => void }) => {
+  guardTabClose: vi.fn((options: { isPinned: boolean; onClose: () => void }) => {
     if (!options.isPinned) {
       options.onClose()
     }
@@ -210,14 +210,14 @@ vi.mock('@/components/terminal-pane/terminal-ime-input-context-refresh', () => (
 }))
 
 // closeFloatingItemConfirmed routes terminals through closeTerminalTab (own pin guard + F9
-// force-reenter) and non-terminals through guardPinnedTabClose; mock both to assert routing.
+// force-reenter) and non-terminals through guardTabClose; mock both to assert routing.
 vi.mock('@/components/terminal/terminal-tab-actions', () => ({
   closeTerminalTab: mocks.closeTerminalTab
 }))
 
-vi.mock('@/store/pinned-tab-close-guard', () => ({
-  guardPinnedTabClose: mocks.guardPinnedTabClose,
-  resolvePinnedTabLabel: () => 'Floating Tab'
+vi.mock('@/store/tab-close-guard', () => ({
+  guardTabClose: mocks.guardTabClose,
+  resolveTabLabel: () => 'Floating Tab'
 }))
 
 vi.mock('@/components/browser-pane/BrowserPane', () => ({

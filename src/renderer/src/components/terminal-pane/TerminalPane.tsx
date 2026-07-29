@@ -14,7 +14,7 @@ import { createPortal } from 'react-dom'
 import type { CSSProperties } from 'react'
 import type { IDisposable } from '@xterm/xterm'
 import { useAppStore } from '../../store'
-import { isUnifiedTabPinned } from '@/store/pinned-tab-close-guard'
+import { isUnifiedTabPinned } from '@/store/tab-close-guard'
 import { useLinkRoutingPreferenceDialog } from '@/components/link-routing-preference-dialog'
 import { DaemonActionDialog, useDaemonActions } from '@/components/shared/useDaemonActions'
 import {
@@ -1302,12 +1302,16 @@ function TerminalPane(
 
   const handleRequestClosePane = useCallback(
     (paneId: number) => {
-      // Why: closing the last pane of a pinned tab prefers the pin dialog over the running-process prompt; non-pinned tabs keep the process prompt.
+      // Why: closing the last pane of a guarded tab prefers the close-confirm
+      // dialog over the running-process prompt; deferring to closeTerminalTab's
+      // guard avoids a double prompt. Non-guarded tabs keep the process prompt.
       const isLastPane = (managerRef.current?.getPanes().length ?? 0) <= 1
       if (isLastPane) {
         const state = useAppStore.getState()
         const confirmPinned = state.settings?.confirmClosePinnedTab ?? true
-        if (confirmPinned && isUnifiedTabPinned(state, worktreeId, tabId)) {
+        const confirmAny = state.settings?.confirmCloseAnyTab ?? false
+        const pinned = isUnifiedTabPinned(state, worktreeId, tabId)
+        if ((confirmPinned && pinned) || confirmAny) {
           executeClosePane(paneId)
           return
         }

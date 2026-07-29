@@ -2776,7 +2776,10 @@
             "0d1963f4a6": "此标签页已固定。确定要关闭它吗？",
             "dont_ask_again": "固定标签页不再询问",
             "0b38ee2f86": "取消",
-            "c337c9d75c": "关闭"
+            "c337c9d75c": "关闭",
+            "close_any_title": "关闭标签页？",
+            "close_any_description": "确定要关闭此标签页吗？",
+            "dont_ask_again_any": "关闭标签页时不再询问"
           },
           "TerminalSshReconnectOverlay": {
             "authFailed": "{{value0}} 身份验证失败。请重新连接以继续此终端会话。",
@@ -5760,7 +5763,9 @@
           "5cb5475664": "关闭固定标签页前确认",
           "36b2a5dc6d": "关闭固定标签页前显示确认对话框。",
           "projectRuntime": "项目运行时",
-          "projectRuntimeDescription": "不覆盖此项的本地 Windows 项目的默认运行时。"
+          "projectRuntimeDescription": "不覆盖此项的本地 Windows 项目的默认运行时。",
+          "confirm_close_any_title": "关闭任意标签页前确认",
+          "confirm_close_any_description": "关闭任意标签页前显示确认对话框。"
         },
         "GeneralSupportSection": {
           "af7d9f4396": "感谢您的支持！",
@@ -8048,7 +8053,9 @@
             "e61157e926": "编辑器自动换行",
             "005be5c699": "在文件编辑器中自动换行长行，而无需水平滚动。",
             "editorFontFamily": "Editor Font Family",
-            "editorFontFamilyDesc": "Font used by file editors and diff views. Leave empty to follow the terminal font."
+            "editorFontFamilyDesc": "Font used by file editors and diff views. Leave empty to follow the terminal font.",
+            "confirm_close_any_title": "关闭任意标签页前确认",
+            "confirm_close_any_description": "关闭任意标签页前显示确认对话框。"
           }
         },
         "git": {

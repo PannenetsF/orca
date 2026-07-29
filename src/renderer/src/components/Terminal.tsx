@@ -11,6 +11,7 @@ import {
   type BackgroundMountTerminalWorktreeDetail
 } from '@/constants/terminal'
 import { useAppStore } from '../store'
+import { guardTabClose, resolveTabLabel } from '../store/tab-close-guard'
 import { folderWorkspaceKey } from '../../../shared/workspace-scope'
 import { useAllWorktrees } from '../store/selectors'
 import { getConnectionId } from '../lib/connection-context'
@@ -596,7 +597,18 @@ function Terminal(): React.JSX.Element | null {
       }
       const file = state.openFiles.find((f) => f.id === fileId)
       if (file?.isDirty) {
+        // Why: the unsaved-changes save/discard dialog is already a confirmation, so don't double-prompt.
         queueEditorCloseRequests([fileId])
+        return
+      }
+      // Why: clean editor tabs prompt only when confirm-any-tab is opted in.
+      if ((state.settings?.confirmCloseAnyTab ?? false) && activeWorktreeId) {
+        guardTabClose({
+          isPinned: false,
+          tabLabel: resolveTabLabel(state, activeWorktreeId, fileId),
+          userInitiated: true,
+          onClose: () => closeFile(fileId)
+        })
         return
       }
       closeFile(fileId)
@@ -1553,7 +1565,7 @@ function Terminal(): React.JSX.Element | null {
   }, [activeWorktreeId, openNewMarkdownInActiveWorkspace])
 
   const handleCloseTab = useCallback((tabId: string) => {
-    closeTerminalTab(tabId)
+    closeTerminalTab(tabId, { userInitiated: true })
   }, [])
 
   const handleCloseBrowserTab = useCallback(
@@ -1569,49 +1581,66 @@ function Terminal(): React.JSX.Element | null {
       if (isPinnedVisibleTab(state, owningWorktreeId, tabId)) {
         return
       }
-      const runtimeEnvironmentId = getActiveWorktreeRuntimeEnvironmentId(owningWorktreeId)
-      if (
-        isWebRuntimeSessionActive(runtimeEnvironmentId) &&
-        browserWorkspaceHasRemoteOwner(state, tabId, runtimeEnvironmentId)
-      ) {
-        void closeWebRuntimeSessionTab({
-          worktreeId: owningWorktreeId,
-          tabId,
-          environmentId: runtimeEnvironmentId,
-          reason: 'user'
+      // Why: re-read fresh state on confirm so a slow dialog answer doesn't act on a stale tab list.
+      const performClose = (): void => {
+        const latest = useAppStore.getState()
+        const runtimeEnvironmentId = getActiveWorktreeRuntimeEnvironmentId(owningWorktreeId)
+        if (
+          isWebRuntimeSessionActive(runtimeEnvironmentId) &&
+          browserWorkspaceHasRemoteOwner(latest, tabId, runtimeEnvironmentId)
+        ) {
+          void closeWebRuntimeSessionTab({
+            worktreeId: owningWorktreeId,
+            tabId,
+            environmentId: runtimeEnvironmentId,
+            reason: 'user'
+          })
+          return
+        }
+        const currentTabs = latest.browserTabsByWorktree[owningWorktreeId] ?? []
+        if (currentTabs.length <= 1) {
+          destroyWorkspaceWebviews(latest.browserPagesByWorkspace, tabId)
+          closeBrowserTab(tabId)
+          if (latest.activeWorktreeId === owningWorktreeId) {
+            const worktreeFile = latest.openFiles.find(
+              (file) => file.worktreeId === owningWorktreeId
+            )
+            if (worktreeFile) {
+              setActiveFile(worktreeFile.id)
+              setActiveTabType('editor')
+            } else {
+              const terminalTab = (latest.tabsByWorktree[owningWorktreeId] ?? [])[0]
+              if (terminalTab) {
+                setActiveTab(terminalTab.id)
+                setActiveTabType('terminal')
+              } else {
+                setActiveWorktree(null)
+              }
+            }
+          }
+          return
+        }
+        if (latest.activeWorktreeId === owningWorktreeId && tabId === latest.activeBrowserTabId) {
+          const idx = currentTabs.findIndex((tab) => tab.id === tabId)
+          const nextTab = currentTabs[idx + 1] ?? currentTabs[idx - 1]
+          if (nextTab) {
+            setActiveBrowserTab(nextTab.id)
+          }
+        }
+        destroyWorkspaceWebviews(latest.browserPagesByWorkspace, tabId)
+        closeBrowserTab(tabId)
+      }
+      // Why: unpinned browser closes prompt only when confirm-any-tab is opted in; otherwise close immediately.
+      if (state.settings?.confirmCloseAnyTab ?? false) {
+        guardTabClose({
+          isPinned: false,
+          tabLabel: resolveTabLabel(state, owningWorktreeId, tabId),
+          userInitiated: true,
+          onClose: performClose
         })
         return
       }
-      const currentTabs = state.browserTabsByWorktree[owningWorktreeId] ?? []
-      if (currentTabs.length <= 1) {
-        destroyWorkspaceWebviews(state.browserPagesByWorkspace, tabId)
-        closeBrowserTab(tabId)
-        if (state.activeWorktreeId === owningWorktreeId) {
-          const worktreeFile = state.openFiles.find((file) => file.worktreeId === owningWorktreeId)
-          if (worktreeFile) {
-            setActiveFile(worktreeFile.id)
-            setActiveTabType('editor')
-          } else {
-            const terminalTab = (state.tabsByWorktree[owningWorktreeId] ?? [])[0]
-            if (terminalTab) {
-              setActiveTab(terminalTab.id)
-              setActiveTabType('terminal')
-            } else {
-              setActiveWorktree(null)
-            }
-          }
-        }
-        return
-      }
-      if (state.activeWorktreeId === owningWorktreeId && tabId === state.activeBrowserTabId) {
-        const idx = currentTabs.findIndex((tab) => tab.id === tabId)
-        const nextTab = currentTabs[idx + 1] ?? currentTabs[idx - 1]
-        if (nextTab) {
-          setActiveBrowserTab(nextTab.id)
-        }
-      }
-      destroyWorkspaceWebviews(state.browserPagesByWorkspace, tabId)
-      closeBrowserTab(tabId)
+      performClose()
     },
     [
       closeBrowserTab,

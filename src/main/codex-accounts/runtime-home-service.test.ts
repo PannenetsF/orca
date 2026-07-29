@@ -162,6 +162,7 @@ function createSettings(overrides: TestSettingsOverrides = {}): GlobalSettings {
     agentCmdOverrides: {},
     keepComputerAwakeWhileAgentsRun: false,
     confirmClosePinnedTab: true,
+    confirmCloseAnyTab: false,
     terminalMacOptionAsAlt: 'false',
     terminalMacOptionAsAltMigrated: true,
     terminalJISYenToBackslash: false,

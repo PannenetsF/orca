@@ -11,7 +11,7 @@ import {
   resolveHostSessionTabIdForWebSessionTab
 } from '@/runtime/web-session-tabs-sync'
 import { resolveTerminalWorktreeRoute } from '@/lib/terminal-worktree-route'
-import { guardPinnedTabClose, resolvePinnedTabLabel } from '@/store/pinned-tab-close-guard'
+import { guardTabClose, resolveTabLabel } from '@/store/tab-close-guard'
 import type {
   TerminalTabCloseReason,
   TerminalTabRetirementPlan
@@ -46,6 +46,11 @@ export function closeTerminalTab(
   options?: {
     force?: boolean
     rejectPinned?: boolean
+    /** Set by genuine single-tab user close gestures (✕, context-menu Close,
+     *  Cmd/Ctrl+W). Only these open the opt-in confirm-any-tab dialog; bulk and
+     *  autonomous lifecycle closes must not, or switching away from a tab whose
+     *  PTY later exits would prompt for a tab the user isn't looking at. */
+    userInitiated?: boolean
     reason?: TerminalTabCloseReason
     /** Close reason sent to the host only. Unlike `reason`, it does not skip
      *  local guards (pinned confirmation keys off `reason === 'pty-exit'`),
@@ -79,26 +84,36 @@ export function closeTerminalTab(
     return
   }
 
-  // Why: a pinned tab routes through the confirmation guard instead of closing
-  // outright. `force` is the post-confirmation re-entry, which skips the guard.
-  if (
-    options?.reason !== 'pty-exit' &&
-    !options?.force &&
-    isPinnedVisibleTab(state, owningWorktreeId, terminalTabId)
-  ) {
-    // Why: background lifecycle callers cannot safely wait on a modal whose
-    // owner may be unattended; reject pinned tabs without bypassing the guard.
-    if (options?.rejectPinned) {
-      options.onCancel?.()
-      return
+  // Why: a pinned tab (always, unless disabled) or any tab (only for genuine
+  // user close gestures, when opted in) routes through the confirmation guard
+  // instead of closing outright. `force` is the post-confirmation re-entry (and
+  // the running-process-dialog confirm), which skips the guard. `pty-exit`
+  // never prompts.
+  if (options?.reason !== 'pty-exit' && !options?.force) {
+    const pinned = isPinnedVisibleTab(state, owningWorktreeId, terminalTabId)
+    const confirmPinned = pinned && (state.settings?.confirmClosePinnedTab ?? true)
+    const confirmAny =
+      options?.userInitiated === true && (state.settings?.confirmCloseAnyTab ?? false)
+    if (confirmPinned || confirmAny) {
+      // Why: background lifecycle callers cannot safely wait on a modal whose
+      // owner may be unattended. Reject pinned tabs; close others immediately
+      // rather than opening a dialog they cannot answer.
+      if (options?.rejectPinned) {
+        if (pinned) {
+          options.onCancel?.()
+          return
+        }
+      } else {
+        guardTabClose({
+          isPinned: pinned,
+          tabLabel: resolveTabLabel(state, owningWorktreeId, terminalTabId),
+          userInitiated: options?.userInitiated === true,
+          onClose: () => closeTerminalTab(tabId, { ...options, force: true }),
+          ...(options?.onCancel ? { onCancel: options.onCancel } : {})
+        })
+        return
+      }
     }
-    guardPinnedTabClose({
-      isPinned: true,
-      tabLabel: resolvePinnedTabLabel(state, owningWorktreeId, terminalTabId),
-      onClose: () => closeTerminalTab(tabId, { ...options, force: true }),
-      ...(options?.onCancel ? { onCancel: options.onCancel } : {})
-    })
-    return
   }
 
   const runtimeEnvironmentId = worktreeRoute.runtimeEnvironmentId
