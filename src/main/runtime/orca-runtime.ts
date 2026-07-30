@@ -541,6 +541,7 @@ import {
 import { joinWorktreeRelativePath } from './runtime-relative-paths'
 import { collectMemorySnapshot } from '../memory/collector'
 import { app, BrowserWindow, ipcMain, Notification } from 'electron'
+import { RemoteClientRendererThrottle } from '../window/remote-client-renderer-throttle'
 import type { AgentBrowserBridge } from '../browser/agent-browser-bridge'
 import type { BrowserBackend } from '../browser/browser-backend'
 import { BrowserError } from '../browser/cdp-bridge'
@@ -2640,6 +2641,12 @@ export class OrcaRuntimeService {
   private rendererGraphEpoch = 0
   private graphStatus: RuntimeGraphStatus = 'unavailable'
   private authoritativeWindowId: number | null = null
+  // Why: keep the authoritative renderer unthrottled while it serves a remote
+  // client so background-throttled graph syncs can't stall session open/close
+  // (the 10s "terminal surface" deadline) even though PTY I/O stays fast.
+  private readonly remoteClientRendererThrottle = new RemoteClientRendererThrottle(() =>
+    this.getBackgroundThrottleTarget()
+  )
   private tabs = new Map<string, RuntimeSyncedTab>()
   private mobileSessionTabsByWorktree = new Map<string, RuntimeMobileSessionTabsSnapshot>()
   // Why: renderer publication ordering must be judged against the renderer's
@@ -5111,6 +5118,8 @@ export class OrcaRuntimeService {
       this.persistWindowlessPtyBindingsForDesktopAttach()
       this.markRendererReloading(HEADLESS_RUNTIME_WINDOW_ID)
       this.authoritativeWindowId = windowId
+      // Why: a window promoted while a client is already connected must inherit the unthrottled serving state.
+      this.remoteClientRendererThrottle.reapply()
       return
     }
     if (this.authoritativeWindowId === null) {
@@ -5118,6 +5127,7 @@ export class OrcaRuntimeService {
       // background PTYs keep arriving; every windowless gap needs this handoff.
       this.persistWindowlessPtyBindingsForDesktopAttach()
       this.authoritativeWindowId = windowId
+      this.remoteClientRendererThrottle.reapply()
     }
   }
 
@@ -33067,6 +33077,26 @@ export class OrcaRuntimeService {
     }
     const win = BrowserWindow.fromId(this.authoritativeWindowId)
     return win && !win.isDestroyed() ? win : null
+  }
+
+  // Why: a paired/remote client authenticated — keep the authoritative renderer
+  // responsive so graph-sync-backed session create/close can't stall behind
+  // background throttling. Idempotent per connection; balanced by
+  // onRemoteClientDisconnected.
+  onRemoteClientConnected(): void {
+    this.remoteClientRendererThrottle.onRemoteClientConnected()
+  }
+
+  onRemoteClientDisconnected(): void {
+    this.remoteClientRendererThrottle.onRemoteClientDisconnected()
+  }
+
+  private getBackgroundThrottleTarget(): BrowserWindow['webContents'] | null {
+    const win = this.getAvailableAuthoritativeWindow()
+    if (!win || win.webContents.isDestroyed()) {
+      return null
+    }
+    return win.webContents
   }
 }
 
