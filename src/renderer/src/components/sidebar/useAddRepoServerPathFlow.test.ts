@@ -76,6 +76,7 @@ describe('useAddRepoServerPathFlow', () => {
 
     const result = useAddRepoServerPathFlow({
       addRepoPath: mocks.addRepoPath,
+      activeRuntimeEnvironmentId: 'env-1',
       closeModal: mocks.closeModal,
       fetchWorktrees: mocks.fetchWorktrees,
       getNestedRepoRuntimeKind: mocks.getNestedRepoRuntimeKind,
@@ -88,11 +89,61 @@ describe('useAddRepoServerPathFlow', () => {
     })
     await result.handleAddServerPath('folder')
 
-    expect(mocks.addRepoPath).toHaveBeenCalledWith('/server/docs', 'folder')
+    expect(mocks.addRepoPath).toHaveBeenCalledWith('/server/docs', 'folder', {
+      runtimeEnvironmentId: 'env-1'
+    })
     expect(mocks.scanNestedRepos).not.toHaveBeenCalled()
     expect(mocks.fetchWorktrees).not.toHaveBeenCalled()
     expect(mocks.onGitRepoReady).not.toHaveBeenCalled()
     expect(mocks.markOnboardingProjectAdded).toHaveBeenCalledWith('addedFolder')
     expect(mocks.closeModal).toHaveBeenCalled()
+  })
+
+  it('routes the Git scan and add to the selected runtime host', async () => {
+    // Why: the Add Project host selector picks a runtime host without flipping
+    // the global active environment. Regression guard for the "Open as Git"
+    // failure where a server repo was probed locally ("checked locally").
+    mocks.getNestedRepoRuntimeKind.mockReturnValue('local')
+    mocks.scanNestedRepos.mockResolvedValue({
+      selectedPath: '/workspace/torch',
+      selectedPathKind: 'git_repo',
+      repos: [],
+      truncated: false,
+      timedOut: false,
+      stopped: false,
+      durationMs: 1,
+      maxDepth: 1,
+      maxRepos: 1,
+      timeoutMs: 1
+    })
+    mocks.addRepoPath.mockResolvedValue(
+      makeRepo({ id: 'torch', path: '/workspace/torch', kind: 'git' })
+    )
+    mocks.stateValues = ['/workspace/torch', false]
+    const { useAddRepoServerPathFlow } = await import('./useAddRepoServerPathFlow')
+
+    const result = useAddRepoServerPathFlow({
+      addRepoPath: mocks.addRepoPath,
+      activeRuntimeEnvironmentId: 'env-1',
+      closeModal: mocks.closeModal,
+      fetchWorktrees: mocks.fetchWorktrees,
+      getNestedRepoRuntimeKind: mocks.getNestedRepoRuntimeKind,
+      scanNestedRepos: mocks.scanNestedRepos,
+      setActiveNestedScanId: mocks.setActiveNestedScanId,
+      setNestedScanInProgress: mocks.setNestedScanInProgress,
+      showNestedRepoReview: mocks.showNestedRepoReview,
+      onGitRepoReady: mocks.onGitRepoReady,
+      setAddProjectBusyLabel: mocks.setAddProjectBusyLabel
+    })
+    await result.handleAddServerPath('git')
+
+    // A runtime host can't stream scans, so no scanId/onProgress is supplied.
+    expect(mocks.scanNestedRepos).toHaveBeenCalledWith('/workspace/torch', undefined, {
+      runtimeEnvironmentId: 'env-1'
+    })
+    expect(mocks.addRepoPath).toHaveBeenCalledWith('/workspace/torch', 'git', {
+      runtimeEnvironmentId: 'env-1'
+    })
+    expect(mocks.onGitRepoReady).toHaveBeenCalledWith('torch', 'runtime_server_path')
   })
 })

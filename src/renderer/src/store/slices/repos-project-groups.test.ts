@@ -793,6 +793,41 @@ describe('project group store routing', () => {
     })
   })
 
+  it('routes nested scans to an explicit runtime host even when the active env is local', async () => {
+    // Why: the Add Project host selector targets a runtime host without flipping
+    // the global active environment. Without explicit routing the git check runs
+    // locally and a real server repo wrongly reads as a non-git folder.
+    runtimeEnvironmentCall.mockResolvedValue({
+      id: 'rpc-scan',
+      ok: true,
+      result: {
+        selectedPath: '/workspace/torch',
+        selectedPathKind: 'git_repo',
+        repos: [],
+        truncated: false,
+        timedOut: false,
+        durationMs: 4,
+        maxDepth: 3
+      },
+      _meta: { runtimeId: 'runtime-remote' }
+    })
+    const store = createTestStore()
+    store.setState({ settings: { activeRuntimeEnvironmentId: null } as never })
+
+    const scan = await store
+      .getState()
+      .scanNestedRepos('/workspace/torch', undefined, { runtimeEnvironmentId: 'env-1' })
+
+    expect(scan?.selectedPathKind).toBe('git_repo')
+    expect(projectGroupsScanNested).not.toHaveBeenCalled()
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'env-1',
+      method: 'projectGroup.scanNested',
+      params: { path: '/workspace/torch' },
+      timeoutMs: 20_000
+    })
+  })
+
   it('moves local repos to a group using the preload projectId contract', async () => {
     const movedRepo = { ...remoteRepo, projectGroupId: projectGroup.id, projectGroupOrder: 3 }
     projectGroupsMoveProject.mockResolvedValue(movedRepo)

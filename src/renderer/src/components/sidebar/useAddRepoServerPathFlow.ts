@@ -23,6 +23,7 @@ type ShowNestedRepoReview = (args: {
 
 export function useAddRepoServerPathFlow({
   addRepoPath,
+  activeRuntimeEnvironmentId,
   closeModal,
   fetchWorktrees,
   getNestedRepoRuntimeKind,
@@ -33,14 +34,23 @@ export function useAddRepoServerPathFlow({
   onGitRepoReady,
   setAddProjectBusyLabel
 }: {
-  addRepoPath: (path: string, kind?: 'git' | 'folder') => Promise<Repo | null>
+  addRepoPath: (
+    path: string,
+    kind?: 'git' | 'folder',
+    options?: { runtimeEnvironmentId?: string | null }
+  ) => Promise<Repo | null>
+  activeRuntimeEnvironmentId: string | null | undefined
   closeModal: () => void
   fetchWorktrees: (repoId: string, options?: { requireAuthoritative?: boolean }) => Promise<unknown>
   getNestedRepoRuntimeKind: (connectionId: string | null) => NestedRepoTelemetryRuntimeKind
   scanNestedRepos: (
     path: string,
     connectionId?: string,
-    controls?: { scanId?: string; onProgress?: (scan: NestedRepoScanResult) => void }
+    controls?: {
+      scanId?: string
+      onProgress?: (scan: NestedRepoScanResult) => void
+      runtimeEnvironmentId?: string | null
+    }
   ) => Promise<NestedRepoScanResult | null>
   setActiveNestedScanId: (scanId: string | null) => void
   setNestedScanInProgress: (inProgress: boolean) => void
@@ -76,17 +86,20 @@ export function useAddRepoServerPathFlow({
       try {
         if (kind === 'git') {
           const attemptId = createNestedRepoTelemetryAttemptId()
-          const runtimeKind = getNestedRepoRuntimeKind(null)
+          // Why: this flow always targets the selected runtime host, so derive
+          // the runtime kind from it (getNestedRepoRuntimeKind reads the global
+          // active environment, which can still be local here).
+          const runtimeKind: NestedRepoTelemetryRuntimeKind = activeRuntimeEnvironmentId?.trim()
+            ? 'runtime'
+            : getNestedRepoRuntimeKind(null)
           const supportsStreamingScan = runtimeKind !== 'runtime'
           const scanId = supportsStreamingScan ? createNestedRepoScanId() : null
           if (scanId) {
             setActiveNestedScanId(scanId)
             setNestedScanInProgress(true)
           }
-          const scan = await scanNestedRepos(
-            path,
-            undefined,
-            scanId
+          const scan = await scanNestedRepos(path, undefined, {
+            ...(scanId
               ? {
                   scanId,
                   onProgress: (progressScan) => {
@@ -108,8 +121,12 @@ export function useAddRepoServerPathFlow({
                     })
                   }
                 }
-              : undefined
-          )
+              : {}),
+            // Why: route the git check to the selected runtime host, not the
+            // global active environment — otherwise a server repo is probed
+            // locally and wrongly falls back to "Open as Folder".
+            runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null
+          })
           if (gen !== serverAddGenRef.current) {
             return
           }
@@ -138,7 +155,11 @@ export function useAddRepoServerPathFlow({
           }
         }
         setAddProjectBusyLabel(kind === 'git' ? 'Opening project...' : 'Opening folder...')
-        const repo = await addRepoPath(path, kind)
+        // Why: pin the add to the selected runtime host so a server repo is
+        // resolved where it lives, matching the scan above.
+        const repo = await addRepoPath(path, kind, {
+          runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null
+        })
         if (gen !== serverAddGenRef.current) {
           return
         }
@@ -167,6 +188,7 @@ export function useAddRepoServerPathFlow({
     },
     [
       addRepoPath,
+      activeRuntimeEnvironmentId,
       closeModal,
       fetchWorktrees,
       getNestedRepoRuntimeKind,

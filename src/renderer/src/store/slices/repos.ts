@@ -175,6 +175,9 @@ function getFolderWorkspaceUpdateCoordinator(
 type NestedRepoScanControls = {
   scanId?: string
   onProgress?: (scan: NestedRepoScanResult) => void
+  // Why: the Add Project host selector picks a runtime target without changing the
+  // global active environment, so the scan must be routed to that host explicitly.
+  runtimeEnvironmentId?: string | null
 }
 
 export type FolderWorkspacePathStatusCacheEntry = {
@@ -2100,7 +2103,13 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
 
   scanNestedRepos: async (path, connectionId, controls) => {
     try {
-      const target = getActiveRuntimeTarget(get().settings)
+      // Why: the Add Project host selector can target a runtime host without
+      // flipping the global active environment; route the scan to the selected
+      // host so the git check runs where the folder actually lives.
+      const target =
+        controls && 'runtimeEnvironmentId' in controls
+          ? getActiveRuntimeTarget({ activeRuntimeEnvironmentId: controls.runtimeEnvironmentId })
+          : getActiveRuntimeTarget(get().settings)
       if (target.kind === 'local') {
         const unsubscribe =
           controls?.scanId && controls.onProgress

@@ -76,10 +76,10 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
   })
 
   const hostSelection = useAddRepoHostSelection({ isOpen, setStep })
+  const selectedParsedHost = hostSelection.selectedParsedHost
+  const selectedHostKind = selectedParsedHost?.kind
   const selectedRuntimeEnvironmentId =
-    hostSelection.selectedParsedHost?.kind === 'runtime'
-      ? hostSelection.selectedParsedHost.environmentId
-      : null
+    selectedParsedHost?.kind === 'runtime' ? selectedParsedHost.environmentId : null
   const { showRemoteNestedRepoReview, trackRemoteNestedScanResult } = useAddRepoRemoteNestedScan({
     setActiveNestedScanId,
     showNestedRepoReview
@@ -170,7 +170,6 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
   })
 
   const isRuntimeEnvironmentActive = Boolean(selectedRuntimeEnvironmentId)
-  const selectedHostKind = hostSelection.selectedParsedHost?.kind
   const { handleBrowse, resetLocalFolderFlow } = useAddRepoLocalFolderFlow({
     isOpen,
     droppedLocalPath,
@@ -195,6 +194,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
     handleAddServerPath
   } = useAddRepoServerPathFlow({
     addRepoPath,
+    activeRuntimeEnvironmentId: selectedRuntimeEnvironmentId,
     // Why: closes only after a folder add, which activates the folder workspace.
     closeModal: closeForFolderHandoff,
     fetchWorktrees,
@@ -332,7 +332,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog({
           hostSelection.hostOptions.find((host) => host.id === hostSelection.selectedHostId)
             ?.label ?? hostSelection.selectedHostId
         }
-        lockSshTargetSelection={hostSelection.selectedParsedHost?.kind === 'ssh'}
+        lockSshTargetSelection={selectedHostKind === 'ssh'}
         remotePath={remotePath}
         remoteError={remoteError}
         isAddingRemote={isAddingRemote}
