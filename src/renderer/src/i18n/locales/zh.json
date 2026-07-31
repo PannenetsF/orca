@@ -6404,7 +6404,7 @@
           "76e02467b8": "更改自定义文件",
           "d3756cf5bc": "已禁用",
           "cloneCompleteLabel": "Clone Complete",
-          "cloneCompleteDescription": "A background repository clone finishes."
+          "cloneCompleteDescription": "A background repository clone has finished."
         },
         "OpenAiTranscriptionKeyDialog": {
           "fa83512e48": "保存密钥",

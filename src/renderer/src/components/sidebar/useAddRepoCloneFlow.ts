@@ -7,29 +7,19 @@ import { getCloneDestinationAutoFill } from './clone-defaults'
 import type { AddRepoDialogStep } from './add-repo-dialog-types'
 import { translate } from '@/i18n/i18n'
 import type { CloneTaskBackend } from '@/store/slices/clone-tasks'
-import type { ExecutionHostId } from '../../../../shared/execution-host'
 
 export function useAddRepoCloneFlow({
   step,
   activeRuntimeEnvironmentId,
   sshTargetId,
   workspaceDir,
-  fetchWorktrees,
   onGitRepoReady
 }: {
   step: AddRepoDialogStep
   activeRuntimeEnvironmentId: string | null | undefined
   sshTargetId?: string | null
   workspaceDir: string | null | undefined
-  fetchWorktrees: (
-    repoId: string,
-    options?: { requireAuthoritative?: boolean; executionHostId?: ExecutionHostId }
-  ) => Promise<unknown>
-  onGitRepoReady: (
-    repoId: string,
-    source: AddRepoExistingWorkspaceSource,
-    executionHostId?: ExecutionHostId
-  ) => Promise<void>
+  onGitRepoReady: (repoId: string, source: AddRepoExistingWorkspaceSource) => Promise<void>
 }): {
   cloneUrl: string
   cloneDestination: string
@@ -88,7 +78,9 @@ export function useAddRepoCloneFlow({
         setActiveTaskId(null)
       })()
     }
-  }, [activeTaskId, cloneTask, fetchWorktrees, onGitRepoReady])
+    // Why: the worktree fetch runs inside runCloneTask (store slice), so this
+    // effect only performs the dialog's navigation handoff on success.
+  }, [activeTaskId, cloneTask, onGitRepoReady])
 
   const cloneDestinationAutoFill = getCloneDestinationAutoFill({
     step,

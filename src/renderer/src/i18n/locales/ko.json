@@ -6394,7 +6394,7 @@
           "76e02467b8": "사용자 정의 파일 변경",
           "d3756cf5bc": "비활성",
           "cloneCompleteLabel": "Clone Complete",
-          "cloneCompleteDescription": "A background repository clone finishes."
+          "cloneCompleteDescription": "A background repository clone has finished."
         },
         "OpenAiTranscriptionKeyDialog": {
           "fa83512e48": "키 저장",

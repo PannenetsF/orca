@@ -6404,7 +6404,7 @@
           "76e02467b8": "Cambiar archivo personalizado",
           "d3756cf5bc": "desactivado",
           "cloneCompleteLabel": "Clone Complete",
-          "cloneCompleteDescription": "A background repository clone finishes."
+          "cloneCompleteDescription": "A background repository clone has finished."
         },
         "OpenAiTranscriptionKeyDialog": {
           "fa83512e48": "Guardar clave",

@@ -164,7 +164,6 @@ export default React.memo(function AddRepoDialog({
     activeRuntimeEnvironmentId: selectedRuntimeEnvironmentId,
     sshTargetId: hostSelection.selectedSshTargetId,
     workspaceDir: settings?.workspaceDir,
-    fetchWorktrees,
     onGitRepoReady: completeGitRepoAdd
   })
 

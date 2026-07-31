@@ -219,4 +219,67 @@ describe('clone-tasks slice', () => {
       expect.objectContaining({ source: 'clone-complete' })
     )
   })
+
+  it('backgrounds and notifies a clone that finished before the dialog handed it off', async () => {
+    // Why: runCloneTask can win the race and mark 'success' before resetCloneFlow
+    // calls backgroundCloneTask. Without a handoff the task would leak with no
+    // sidebar row, no toast, and no navigation. Backgrounding it late must still
+    // surface it and fire the completion ping runCloneTask skipped.
+    const repo = makeRepo()
+    clone.mockResolvedValue(repo)
+    const store = seedCloneStore()
+    const taskId = store.getState().startCloneTask({
+      url: 'https://example.com/repo.git',
+      destination: '/dest',
+      backend: 'local'
+    })
+
+    // Let the clone resolve to success while still un-backgrounded (dialog open).
+    await vi.waitFor(() => {
+      expect(store.getState().cloneTasksById[taskId]?.status).toBe('success')
+    })
+    expect(notificationsDispatch).not.toHaveBeenCalled()
+
+    // Dialog closes after completion — the late handoff must recover the task.
+    store.getState().backgroundCloneTask(taskId)
+
+    expect(store.getState().cloneTasksById[taskId]?.backgrounded).toBe(true)
+    expect(notificationsDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'clone-complete' })
+    )
+  })
+
+  it('does not background or notify a failed clone on dialog close', async () => {
+    clone.mockRejectedValue(new Error('network down'))
+    const store = seedCloneStore()
+    const taskId = store.getState().startCloneTask({
+      url: 'https://example.com/repo.git',
+      destination: '/dest',
+      backend: 'local'
+    })
+    await vi.waitFor(() => {
+      expect(store.getState().cloneTasksById[taskId]?.status).toBe('error')
+    })
+
+    store.getState().backgroundCloneTask(taskId)
+
+    // A failed clone stays dialog-owned until dismissed; no tray ping.
+    expect(store.getState().cloneTasksById[taskId]?.backgrounded).toBe(false)
+    expect(notificationsDispatch).not.toHaveBeenCalled()
+  })
+
+  it('fails an ssh clone with an actionable error when connectionId is missing', async () => {
+    const store = seedCloneStore()
+    const taskId = store.getState().startCloneTask({
+      url: 'https://example.com/repo.git',
+      destination: '/dest',
+      backend: 'ssh'
+    })
+
+    await vi.waitFor(() => {
+      expect(store.getState().cloneTasksById[taskId]?.status).toBe('error')
+    })
+    expect(store.getState().cloneTasksById[taskId]?.error).toContain('missing connectionId')
+    expect(cloneRemote).not.toHaveBeenCalled()
+  })
 })
