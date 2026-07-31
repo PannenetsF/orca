@@ -3,9 +3,24 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDefaultOnboardingState, getDefaultSettings } from '../../../../shared/constants'
-import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
+import type { NestedRepoScanResult, Repo, Worktree } from '../../../../shared/types'
 import { useAppStore } from '@/store'
 import { useOnboardingFlow } from './use-onboarding-flow'
+
+const mocks = vi.hoisted(() => ({
+  activateAndRevealWorktree: vi.fn(),
+  openProjectDefaultCheckout: vi.fn()
+}))
+
+vi.mock('@/lib/worktree-activation', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  activateAndRevealWorktree: mocks.activateAndRevealWorktree
+}))
+
+vi.mock('../sidebar/project-added-default-checkout', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  openProjectDefaultCheckout: mocks.openProjectDefaultCheckout
+}))
 
 function nestedScan(path: string): NestedRepoScanResult {
   return {
@@ -26,14 +41,38 @@ function gitScan(path: string): NestedRepoScanResult {
   return { ...nestedScan(path), selectedPathKind: 'git_repo', repos: [] }
 }
 
-function repo(path: string): Repo {
+function repo(path: string, overrides: Partial<Repo> = {}): Repo {
   return {
     id: 'repo-1',
     path,
     displayName: 'repo-1',
     badgeColor: '#999999',
     addedAt: 1,
-    kind: 'git'
+    kind: 'git',
+    ...overrides
+  }
+}
+
+function worktree(id: string, hostId: Worktree['hostId']): Worktree {
+  return {
+    id,
+    repoId: 'repo-1',
+    path: `/srv/${id}`,
+    displayName: id,
+    comment: '',
+    linkedIssue: null,
+    linkedPR: null,
+    linkedLinearIssue: null,
+    isArchived: false,
+    isUnread: false,
+    isPinned: false,
+    sortOrder: 0,
+    lastActivityAt: 0,
+    head: 'abc',
+    branch: 'refs/heads/main',
+    isBare: false,
+    isMainWorktree: true,
+    hostId
   }
 }
 
@@ -44,6 +83,10 @@ describe('useOnboardingFlow host routing', () => {
   const cancelNestedRepoScan = vi.fn()
   const pickFolder = vi.fn()
   const addLocalRepo = vi.fn()
+  const fetchRepos = vi.fn().mockResolvedValue(undefined)
+  const fetchWorktrees = vi.fn().mockResolvedValue(undefined)
+  const onboardingUpdate = vi.fn().mockResolvedValue(getDefaultOnboardingState())
+  const onboardingCompleted = vi.fn().mockResolvedValue(undefined)
 
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true)
@@ -56,6 +99,18 @@ describe('useOnboardingFlow host routing', () => {
       addRepoPath,
       importNestedRepos,
       cancelNestedRepoScan,
+      fetchRepos,
+      fetchWorktrees,
+      repos: [
+        repo('/srv/a', { executionHostId: 'runtime:runtime-a' }),
+        repo('/srv/b', { executionHostId: 'runtime:runtime-b' })
+      ],
+      worktreesByRepo: {
+        'repo-1': [
+          worktree('runtime-b-worktree', 'runtime:runtime-b'),
+          worktree('runtime-a-worktree', 'runtime:runtime-a')
+        ]
+      },
       refreshDetectedAgents: vi.fn().mockResolvedValue([]),
       refreshPreflightStatus: vi.fn().mockResolvedValue(undefined)
     })
@@ -65,7 +120,9 @@ describe('useOnboardingFlow host routing', () => {
         repos: {
           pickFolder,
           add: addLocalRepo
-        }
+        },
+        onboarding: { update: onboardingUpdate },
+        starNag: { onboardingCompleted }
       }
     })
     vi.clearAllMocks()
@@ -113,11 +170,27 @@ describe('useOnboardingFlow host routing', () => {
     expect(addRepoPath).toHaveBeenCalledWith('/srv/repo', 'git', {
       runtimeEnvironmentId: 'runtime-a'
     })
+    expect(fetchRepos).toHaveBeenCalledWith({ runtimeEnvironmentId: 'runtime-a' })
+    expect(fetchWorktrees).toHaveBeenCalledWith('repo-1', {
+      requireAuthoritative: true,
+      executionHostId: 'runtime:runtime-a'
+    })
+    expect(mocks.openProjectDefaultCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoId: 'repo-1',
+        executionHostId: 'runtime:runtime-a'
+      })
+    )
   })
 
   it('imports a nested review on the runtime that produced the scan', async () => {
     scanNestedRepos.mockResolvedValue(nestedScan('/srv/projects'))
-    importNestedRepos.mockResolvedValue(null)
+    importNestedRepos.mockResolvedValue({
+      projects: [{ path: '/srv/projects/child', projectId: 'repo-1', status: 'imported' as const }],
+      importedCount: 1,
+      alreadyKnownCount: 0,
+      failedCount: 0
+    })
     const { result } = renderHook(() => useOnboardingFlow(getDefaultOnboardingState(), vi.fn()))
 
     act(() => result.current.setServerPath('/srv/projects'))
@@ -139,6 +212,58 @@ describe('useOnboardingFlow host routing', () => {
         projectPaths: ['/srv/projects/child'],
         runtimeEnvironmentId: 'runtime-a'
       })
+    )
+    expect(fetchRepos).toHaveBeenCalledWith({ runtimeEnvironmentId: 'runtime-a' })
+    expect(fetchWorktrees).toHaveBeenCalledTimes(2)
+    expect(fetchWorktrees).toHaveBeenNthCalledWith(1, 'repo-1', {
+      requireAuthoritative: true,
+      executionHostId: 'runtime:runtime-a'
+    })
+    expect(fetchWorktrees).toHaveBeenNthCalledWith(2, 'repo-1', {
+      requireAuthoritative: true,
+      executionHostId: 'runtime:runtime-a'
+    })
+    expect(mocks.openProjectDefaultCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ executionHostId: 'runtime:runtime-a' })
+    )
+  })
+
+  it('activates a non-git folder on the captured runtime after selection changes', async () => {
+    let resolveAdd: (value: Repo) => void = () => {}
+    addRepoPath.mockReturnValue(
+      new Promise<Repo>((resolve) => {
+        resolveAdd = resolve
+      })
+    )
+    const { result } = renderHook(() => useOnboardingFlow(getDefaultOnboardingState(), vi.fn()))
+
+    act(() => result.current.setServerPath('/srv/folder'))
+    let openPromise: Promise<void> = Promise.resolve()
+    act(() => {
+      openPromise = result.current.openFolder('folder')
+    })
+    await vi.waitFor(() =>
+      expect(addRepoPath).toHaveBeenCalledWith('/srv/folder', 'folder', {
+        runtimeEnvironmentId: 'runtime-a'
+      })
+    )
+    act(() => {
+      useAppStore.setState((state) => ({
+        settings: state.settings
+          ? { ...state.settings, activeRuntimeEnvironmentId: 'runtime-b' }
+          : state.settings
+      }))
+      resolveAdd(repo('/srv/folder', { kind: 'folder' }))
+    })
+    await act(async () => openPromise)
+
+    expect(fetchRepos).toHaveBeenCalledWith({ runtimeEnvironmentId: 'runtime-a' })
+    expect(fetchWorktrees).toHaveBeenCalledWith('repo-1', {
+      executionHostId: 'runtime:runtime-a'
+    })
+    expect(mocks.activateAndRevealWorktree).toHaveBeenCalledWith(
+      'runtime-a-worktree',
+      expect.objectContaining({ executionHostId: 'runtime:runtime-a' })
     )
   })
 

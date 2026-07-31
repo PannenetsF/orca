@@ -31,7 +31,14 @@ import { persistStep, useCloseWith, usePersistCurrentStep } from './use-onboardi
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { buildOnboardingFolderAgentStartup } from '@/lib/onboarding-folder-agent-startup'
 import { resolveOnboardingSettingsHydration } from './onboarding-settings-hydration'
-import { openProjectDefaultCheckout } from '../sidebar/project-added-default-checkout'
+import {
+  getProjectWorktreesForHost,
+  openProjectDefaultCheckout
+} from '../sidebar/project-added-default-checkout'
+import {
+  capturedAddRepoExecutionHostId,
+  worktreeRefreshOptions
+} from '../sidebar/add-repo-runtime-owner'
 import { translate } from '@/i18n/i18n'
 import { resolveAgentPermissionModeSummary } from '../../../../shared/tui-agent-permissions'
 import { isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
@@ -537,23 +544,36 @@ export function useOnboardingFlow(
   })
 
   const completeRepo = useCallback(
-    async (projectId: string, isGit: boolean, path: 'open_folder' | 'clone_url') => {
-      await fetchRepos()
+    async (
+      projectId: string,
+      isGit: boolean,
+      path: 'open_folder' | 'clone_url',
+      runtimeEnvironmentId: string | null
+    ) => {
+      const executionHostId = capturedAddRepoExecutionHostId(runtimeEnvironmentId)!
+      await fetchRepos({ runtimeEnvironmentId })
       // Why: a non-authoritative Git refresh should still complete onboarding onto the project row as a fallback.
-      await fetchWorktrees(projectId, isGit ? { requireAuthoritative: true } : undefined)
-      const worktrees = useAppStore.getState().worktreesByRepo[projectId] ?? []
+      await fetchWorktrees(
+        projectId,
+        isGit ? worktreeRefreshOptions(runtimeEnvironmentId) : { executionHostId }
+      )
+      const worktrees = getProjectWorktreesForHost(
+        useAppStore.getState().worktreesByRepo[projectId] ?? [],
+        executionHostId
+      )
       if (isGit) {
         await openProjectDefaultCheckout({
           repoId: projectId,
           source: path === 'clone_url' ? 'onboarding_clone_url' : 'onboarding_open_folder',
-          setHideDefaultBranchWorkspace
+          setHideDefaultBranchWorkspace,
+          executionHostId
         })
       } else {
         const worktree = worktrees[0] ?? null
         if (worktree) {
           // Why: non-git folders skip the composer, so seed their first terminal with the chosen default agent here.
           const startup = buildOnboardingFolderAgentStartup(settings)
-          activateAndRevealWorktree(worktree.id, { startup })
+          activateAndRevealWorktree(worktree.id, { startup, executionHostId })
         }
       }
       // Why: next() short-circuits the repo step; emit step_completed here, gated on closeWith success so a persistence failure can't double-count.
@@ -756,7 +776,7 @@ export function useOnboardingFlow(
             track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
             return
           }
-          await completeRepo(repo.id, isGitRepoKind(repo), 'open_folder')
+          await completeRepo(repo.id, isGitRepoKind(repo), 'open_folder', runtimeEnvironmentId)
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err))
           track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
@@ -820,7 +840,7 @@ export function useOnboardingFlow(
         if ('error' in result) {
           throw new Error(result.error)
         }
-        await completeRepo(result.repo.id, isGitRepoKind(result.repo), 'open_folder')
+        await completeRepo(result.repo.id, isGitRepoKind(result.repo), 'open_folder', null)
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
         track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
@@ -912,9 +932,12 @@ export function useOnboardingFlow(
       }
       for (const importedRepoId of importedRepoIds) {
         // Why: imported repos are already persisted, so a non-authoritative SSH refresh shouldn't block revealing the first project.
-        await fetchWorktrees(importedRepoId, { requireAuthoritative: true })
+        await fetchWorktrees(
+          importedRepoId,
+          worktreeRefreshOptions(nestedScanRuntimeEnvironmentIdRef.current)
+        )
       }
-      await completeRepo(projectId, true, 'open_folder')
+      await completeRepo(projectId, true, 'open_folder', nestedScanRuntimeEnvironmentIdRef.current)
     } catch (err) {
       if (!resultTracked) {
         track(
@@ -1042,7 +1065,12 @@ export function useOnboardingFlow(
               url: trimmed,
               destination
             })
-      await completeRepo(repo.id, true, 'clone_url')
+      await completeRepo(
+        repo.id,
+        true,
+        'clone_url',
+        target.kind === 'environment' ? target.environmentId : null
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       track('onboarding_step4_path_failed', { path: 'clone_url', reason: 'clone_failed' })

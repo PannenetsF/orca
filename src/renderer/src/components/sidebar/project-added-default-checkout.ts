@@ -17,7 +17,7 @@ export function getProjectDefaultCheckout(worktrees: readonly Worktree[]): Workt
   return worktrees.find((worktree) => worktree.isMainWorktree) ?? null
 }
 
-function getProjectWorktreesForHost<T extends Worktree>(
+export function getProjectWorktreesForHost<T extends Worktree>(
   worktrees: readonly T[],
   executionHostId?: ExecutionHostId
 ): T[] {
