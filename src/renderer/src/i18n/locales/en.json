@@ -7128,7 +7128,8 @@
           "projectRuntime": "Project Runtime",
           "projectRuntimeDescription": "Default runtime for local Windows projects that do not override it.",
           "confirm_close_any_title": "Confirm before closing any tab",
-          "confirm_close_any_description": "Show a confirmation dialog before any tab is closed."
+          "confirm_close_any_description": "Show a confirmation dialog before any tab is closed.",
+          "confirm_close_any_kw": "any"
         },
         "GeneralSupportSection": {
           "af7d9f4396": "Thanks for the support!",
@@ -9659,7 +9660,8 @@
             "5250cf0e48": "pin",
             "afa37a34e1": "close",
             "confirm_close_any_title": "Confirm before closing any tab",
-            "confirm_close_any_description": "Show a confirmation dialog before any tab is closed."
+            "confirm_close_any_description": "Show a confirmation dialog before any tab is closed.",
+            "confirm_close_any_kw": "any"
           }
         },
         "git": {
