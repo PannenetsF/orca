@@ -71,9 +71,25 @@ describe('Claude terminal session option detection', () => {
     })
   })
 
+  it('keeps a custom model containing a catalog label', () => {
+    const screen = 'Claude Code v2.1.211\r\ncompany/my-haiku-v2 · API Usage Billing\r\n~/repo'
+
+    expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
+      model: 'company/my-haiku-v2'
+    })
+  })
+
+  it('ignores catalog labels outside the descriptor row', () => {
+    const screen = 'Claude Code v2.1.211\r\nacme-frontier · API Usage Billing\r\n~/work/Haiku'
+
+    expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
+      model: 'acme-frontier'
+    })
+  })
+
   it('recovers a custom model when xterm joins the descriptor to the header', () => {
     const screen =
-      '[?1049h[H▐▛███▜▌Claude Codev2.1.211\r\n' +
+      '[?1049h[H▐▛███▜▌Claude Codev2.1.211' +
       '▝▜█████▛▘acme-frontier with medium effort · API Usage Billing'
 
     expect(readClaudeSessionOptionsFromTerminalScreen(screen)).toEqual({
