@@ -24951,6 +24951,29 @@ describe('OrcaRuntimeService', () => {
       )
     expect(inventory(clientA)).toEqual(inventory(host))
     expect(inventory(clientB)).toEqual(inventory(host))
+
+    runtime['mobileSessionTabsByWorktree'].delete(TEST_WORKTREE_ID)
+    expect(runtime['syncMobileSessionTabs']([])).toEqual(new Set([TEST_WORKTREE_ID]))
+    expect(runtime['mobileSessionTabsByWorktree'].get(TEST_WORKTREE_ID)?.tabs).toEqual([
+      expect.objectContaining({
+        parentTabId: 'tab-paired-headed',
+        leafId,
+        ptyId: 'pty-paired-headed'
+      })
+    ])
+    const restoredHost = await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)
+    const restoredClientA = await runtime.listMobileSessionTabs(
+      `id:${TEST_WORKTREE_ID}`,
+      'device-a'
+    )
+    const restoredClientB = await runtime.listMobileSessionTabs(
+      `id:${TEST_WORKTREE_ID}`,
+      'device-b'
+    )
+    expect(inventory(restoredHost)).toEqual(inventory(host))
+    expect(inventory(restoredClientA)).toEqual(inventory(host))
+    expect(inventory(restoredClientB)).toEqual(inventory(host))
+    expect(spawn).not.toHaveBeenCalled()
   })
 
   it.each([

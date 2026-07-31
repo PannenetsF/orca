@@ -339,6 +339,16 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
         { timeout: 30_000 }
       )
       .toBe(true)
+    expect(
+      (
+        await callRuntime<{ tabs: { terminal?: string | null }[] }>(
+          client.page,
+          'session.tabs.list',
+          { worktree: `id:${worktree.id}` }
+        )
+      ).tabs.some((candidate) => candidate.terminal === terminal),
+      'authoritative inventory dropped the terminal before ACK starvation'
+    ).toBe(true)
     await client.page.evaluate(
       (worktreeId) => window.__store?.getState().setActiveWorktree(worktreeId),
       worktree.id
@@ -462,6 +472,16 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       .poll(() => getTerminalContent(observer.page), { timeout: 30_000 })
       .toContain(`LIVE:${liveMarker}`)
     expect(await waitForActivePanePtyId(observer.page, 30_000)).toBe(observerOriginalPtyId)
+    expect(
+      (
+        await callRuntime<{ tabs: { terminal?: string | null }[] }>(
+          client.page,
+          'session.tabs.list',
+          { worktree: `id:${worktree.id}` }
+        )
+      ).tabs.some((candidate) => candidate.terminal === terminal),
+      'authoritative inventory dropped the terminal during ACK recovery'
+    ).toBe(true)
 
     await restoreHeadedHost(electronApp, orcaPage)
     await orcaPage.evaluate(
@@ -495,6 +515,16 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       countVisualMarkerPixels(restoredTerminalScreenshot),
       'host terminal marker did not repaint after the background publication toggle'
     ).toBeGreaterThan(500)
+    expect(
+      (
+        await callRuntime<{ tabs: { terminal?: string | null }[] }>(
+          client.page,
+          'session.tabs.list',
+          { worktree: `id:${worktree.id}` }
+        )
+      ).tabs.some((candidate) => candidate.terminal === terminal),
+      'authoritative inventory dropped the terminal while restoring the host'
+    ).toBe(true)
 
     await minimizeHeadedHost(electronApp, orcaPage)
     await showHeadedClient(electronApp, observer.page)
@@ -506,7 +536,15 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       (candidate) => candidate.terminal === terminal
     )
     if (!authoritativeTab) {
-      throw new Error('Paired terminal was absent from authoritative inventory before close')
+      throw new Error(
+        `Paired terminal was absent from authoritative inventory before close: ${JSON.stringify(
+          authoritativeInventory.tabs.map((candidate) => ({
+            id: candidate.id,
+            parentTabId: candidate.parentTabId,
+            terminal: candidate.terminal
+          }))
+        )}`
+      )
     }
     const closeStartedAt = performance.now()
     await callRuntime(client.page, 'session.tabs.close', {
