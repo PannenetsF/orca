@@ -146,4 +146,53 @@ describe('useAddRepoServerPathFlow', () => {
     })
     expect(mocks.onGitRepoReady).toHaveBeenCalledWith('torch', 'runtime_server_path')
   })
+
+  it('treats an all-whitespace runtime id as local for both the scan and the add', async () => {
+    // Why: the telemetry guard trims the id but the scan/add selectors used to
+    // forward it untrimmed, so a whitespace id disagreed — routing local for
+    // telemetry while sending whitespace to the RPC. Both must resolve to null.
+    mocks.getNestedRepoRuntimeKind.mockReturnValue('local')
+    mocks.scanNestedRepos.mockResolvedValue({
+      selectedPath: '/workspace/torch',
+      selectedPathKind: 'git_repo',
+      repos: [],
+      truncated: false,
+      timedOut: false,
+      stopped: false,
+      durationMs: 1,
+      maxDepth: 1,
+      maxRepos: 1,
+      timeoutMs: 1
+    })
+    mocks.addRepoPath.mockResolvedValue(
+      makeRepo({ id: 'torch', path: '/workspace/torch', kind: 'git' })
+    )
+    mocks.stateValues = ['/workspace/torch', false]
+    const { useAddRepoServerPathFlow } = await import('./useAddRepoServerPathFlow')
+
+    const result = useAddRepoServerPathFlow({
+      addRepoPath: mocks.addRepoPath,
+      activeRuntimeEnvironmentId: '   ',
+      closeModal: mocks.closeModal,
+      fetchWorktrees: mocks.fetchWorktrees,
+      getNestedRepoRuntimeKind: mocks.getNestedRepoRuntimeKind,
+      scanNestedRepos: mocks.scanNestedRepos,
+      setActiveNestedScanId: mocks.setActiveNestedScanId,
+      setNestedScanInProgress: mocks.setNestedScanInProgress,
+      showNestedRepoReview: mocks.showNestedRepoReview,
+      onGitRepoReady: mocks.onGitRepoReady,
+      setAddProjectBusyLabel: mocks.setAddProjectBusyLabel
+    })
+    await result.handleAddServerPath('git')
+
+    // Resolved to local, so a streaming scan (scanId) is supplied — not the
+    // no-stream runtime path — and the RPC selector gets null, not whitespace.
+    const scanArgs = mocks.scanNestedRepos.mock.calls[0]
+    expect(scanArgs[0]).toBe('/workspace/torch')
+    expect(scanArgs[2].runtimeEnvironmentId).toBeNull()
+    expect(typeof scanArgs[2].scanId).toBe('string')
+    expect(mocks.addRepoPath).toHaveBeenCalledWith('/workspace/torch', 'git', {
+      runtimeEnvironmentId: null
+    })
+  })
 })

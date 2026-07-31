@@ -83,13 +83,16 @@ export function useAddRepoServerPathFlow({
       const gen = ++serverAddGenRef.current
       setIsAddingServerPath(true)
       setAddProjectBusyLabel(kind === 'git' ? 'Scanning for repositories...' : 'Opening folder...')
+      // Why: this flow always targets the selected runtime host. Resolve the id
+      // once (trimmed) so the telemetry guard, the scan, and the add can't
+      // disagree on an all-whitespace value.
+      const resolvedRuntimeEnvironmentId = activeRuntimeEnvironmentId?.trim() || null
       try {
         if (kind === 'git') {
           const attemptId = createNestedRepoTelemetryAttemptId()
-          // Why: this flow always targets the selected runtime host, so derive
-          // the runtime kind from it (getNestedRepoRuntimeKind reads the global
-          // active environment, which can still be local here).
-          const runtimeKind: NestedRepoTelemetryRuntimeKind = activeRuntimeEnvironmentId?.trim()
+          // Why: getNestedRepoRuntimeKind reads the global active environment,
+          // which can still be local here, so derive the kind from the selected host.
+          const runtimeKind: NestedRepoTelemetryRuntimeKind = resolvedRuntimeEnvironmentId
             ? 'runtime'
             : getNestedRepoRuntimeKind(null)
           const supportsStreamingScan = runtimeKind !== 'runtime'
@@ -125,7 +128,7 @@ export function useAddRepoServerPathFlow({
             // Why: route the git check to the selected runtime host, not the
             // global active environment — otherwise a server repo is probed
             // locally and wrongly falls back to "Open as Folder".
-            runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null
+            runtimeEnvironmentId: resolvedRuntimeEnvironmentId
           })
           if (gen !== serverAddGenRef.current) {
             return
@@ -158,7 +161,7 @@ export function useAddRepoServerPathFlow({
         // Why: pin the add to the selected runtime host so a server repo is
         // resolved where it lives, matching the scan above.
         const repo = await addRepoPath(path, kind, {
-          runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null
+          runtimeEnvironmentId: resolvedRuntimeEnvironmentId
         })
         if (gen !== serverAddGenRef.current) {
           return
