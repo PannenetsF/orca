@@ -740,6 +740,12 @@ describe('closeTerminalTab', () => {
         onConfirm: expect.any(Function)
       })
     )
+
+    // Why: assert the continuation actually closes the tab, not just that a
+    // dialog was requested — a broken onConfirm would otherwise pass silently.
+    const { onConfirm } = requestPinnedTabCloseConfirm.mock.calls[0][0]
+    onConfirm()
+    expect(closeTab).toHaveBeenCalledWith('pinned-entity-1', { reason: undefined })
   })
 
   it('does not prompt for confirmCloseAnyTab when the close is not user-initiated', () => {
@@ -776,7 +782,8 @@ describe('closeTerminalTab', () => {
       })
     )
 
-    // Why: a parked pinned tab's autonomous PTY exit must keep the pinned confirmation.
+    // Why: a non-user-initiated, non-PTY-exit close of a pinned tab (e.g. a
+    // bulk/programmatic close) must still keep the pinned confirmation.
     closeTerminalTab('pinned-entity-1')
 
     expect(closeTab).not.toHaveBeenCalled()

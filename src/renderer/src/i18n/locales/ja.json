@@ -5930,7 +5930,8 @@
           "projectRuntime": "プロジェクトのランタイム",
           "projectRuntimeDescription": "個別に指定していないローカル Windows プロジェクトの既定のランタイム。",
           "confirm_close_any_title": "タブを閉じる前に確認",
-          "confirm_close_any_description": "タブを閉じる前に確認ダイアログを表示します。"
+          "confirm_close_any_description": "タブを閉じる前に確認ダイアログを表示します。",
+          "confirm_close_any_kw": "任意"
         },
         "GeneralSupportSection": {
           "af7d9f4396": "サポートありがとうございます!",
@@ -8325,7 +8326,8 @@
             "externalWorktrees": "外部ワークツリー",
             "externalWorktreesDescription": "Orca 外で作成されたワークツリーをデフォルトで表示するかどうかを選択します。",
             "confirm_close_any_title": "タブを閉じる前に確認",
-            "confirm_close_any_description": "タブを閉じる前に確認ダイアログを表示します。"
+            "confirm_close_any_description": "タブを閉じる前に確認ダイアログを表示します。",
+            "confirm_close_any_kw": "任意"
           }
         },
         "git": {

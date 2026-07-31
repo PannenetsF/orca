@@ -6790,7 +6790,8 @@
           "projectRuntime": "Project Runtime",
           "projectRuntimeDescription": "Default runtime for local Windows projects that do not override it.",
           "confirm_close_any_title": "Confirm before closing any tab",
-          "confirm_close_any_description": "Show a confirmation dialog before any tab is closed."
+          "confirm_close_any_description": "Show a confirmation dialog before any tab is closed.",
+          "confirm_close_any_kw": "any"
         },
         "GeneralSupportSection": {
           "af7d9f4396": "Thanks for the support!",
@@ -9224,7 +9225,8 @@
             "externalWorktrees": "External worktrees",
             "externalWorktreesDescription": "Choose whether worktrees created outside Orca appear by default.",
             "confirm_close_any_title": "Confirm before closing any tab",
-            "confirm_close_any_description": "Show a confirmation dialog before any tab is closed."
+            "confirm_close_any_description": "Show a confirmation dialog before any tab is closed.",
+            "confirm_close_any_kw": "any"
           }
         },
         "git": {

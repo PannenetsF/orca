@@ -5945,7 +5945,8 @@
           "projectRuntime": "Runtime del proyecto",
           "projectRuntimeDescription": "Runtime predeterminado para proyectos locales de Windows que no lo sobrescriben.",
           "confirm_close_any_title": "Confirmar antes de cerrar cualquier pestaña",
-          "confirm_close_any_description": "Muestra un diálogo de confirmación antes de cerrar cualquier pestaña."
+          "confirm_close_any_description": "Muestra un diálogo de confirmación antes de cerrar cualquier pestaña.",
+          "confirm_close_any_kw": "cualquiera"
         },
         "GeneralSupportSection": {
           "af7d9f4396": "¡Gracias por el apoyo!",
@@ -8303,7 +8304,8 @@
             "externalWorktrees": "Worktrees externos",
             "externalWorktreesDescription": "Elige si los worktrees creados fuera de Orca aparecen de forma predeterminada.",
             "confirm_close_any_title": "Confirmar antes de cerrar cualquier pestaña",
-            "confirm_close_any_description": "Muestra un diálogo de confirmación antes de cerrar cualquier pestaña."
+            "confirm_close_any_description": "Muestra un diálogo de confirmación antes de cerrar cualquier pestaña.",
+            "confirm_close_any_kw": "cualquiera"
           }
         },
         "git": {
