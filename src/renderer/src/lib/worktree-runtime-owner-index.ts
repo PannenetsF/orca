@@ -156,13 +156,17 @@ function worktreeOwnerIdentity(owner: WorktreeOwnerRecord): string {
   ])
 }
 
-function worktreeOwnerHostId(owner: WorktreeOwnerRecord): ExecutionHostId {
-  return (
-    parseExecutionHostId(owner.hostId)?.id ??
-    (owner.runtimeOwnerEnvironmentId
-      ? toRuntimeExecutionHostId(owner.runtimeOwnerEnvironmentId)
-      : 'local')
-  )
+function worktreeOwnerHostIds(owner: WorktreeOwnerRecord): ExecutionHostId[] {
+  const physicalHostId = parseExecutionHostId(owner.hostId)?.id
+  const runtimeEnvironmentId = owner.runtimeOwnerEnvironmentId?.trim()
+  if (!runtimeEnvironmentId) {
+    return [physicalHostId ?? 'local']
+  }
+  const runtimeHostId = toRuntimeExecutionHostId(runtimeEnvironmentId)
+  // Why: paired HUB worktrees need logical-runtime lookup without losing their physical SSH route.
+  return physicalHostId && physicalHostId !== runtimeHostId
+    ? [physicalHostId, runtimeHostId]
+    : [runtimeHostId]
 }
 
 export function resolveIndexedWorktreeOwner(
@@ -187,10 +191,12 @@ export function resolveIndexedWorktreeOwner(
         ) {
           next.set(id, { kind: 'ambiguous' })
         }
-        next.set(`${id}\0${worktreeOwnerHostId(worktree)}`, {
-          kind: 'resolved',
-          owner: worktree
-        })
+        for (const hostId of worktreeOwnerHostIds(worktree)) {
+          next.set(`${id}\0${hostId}`, {
+            kind: 'resolved',
+            owner: worktree
+          })
+        }
       }
     }
     index = next
