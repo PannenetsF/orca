@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ElectronApplication, Page } from '@stablyai/playwright-test'
+import { PNG } from 'pngjs'
 import type { RuntimeTerminalRead } from '../../src/shared/runtime-types'
 import { toWebTerminalSurfaceTabId } from '../../src/shared/terminal-surface-id'
 import { expect, test } from './helpers/orca-app'
@@ -31,7 +32,7 @@ writeFileSync(
     "      process.stdout.write('HOST_FLOOD_COMPLETE\\r\\n')",
     '      continue',
     '    }',
-    '    process.stdout.write(`LIVE:${input}\\r\\n`)',
+    "    process.stdout.write(`\\x1b[48;2;24;96;144mLIVE:${input}${' '.repeat(48)}\\x1b[0m\\r\\n`)",
     '  }',
     '})',
     'process.stdin.resume()'
@@ -93,35 +94,142 @@ async function getAppResourceProxies(
   })
 }
 
-async function minimizeHeadedHost(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const host = BrowserWindow.getAllWindows().find(
-      (window) => !window.webContents.getURL().includes('web-index')
+async function minimizeHeadedHost(electronApp: ElectronApplication, page: Page): Promise<void> {
+  const host = await electronApp.browserWindow(page)
+  await host.evaluate((window) => window.minimize())
+  await expect
+    .poll(() =>
+      host.evaluate((window) => ({
+        backgroundThrottling: window.webContents.getBackgroundThrottling(),
+        minimized: window.isMinimized(),
+        visible: window.isVisible()
+      }))
     )
-    if (!host) {
-      throw new Error('Headed host window is unavailable')
-    }
-    host.minimize()
+    .toEqual({ backgroundThrottling: true, minimized: true, visible: false })
+}
+
+async function restoreHeadedHost(electronApp: ElectronApplication, page: Page): Promise<void> {
+  const host = await electronApp.browserWindow(page)
+  await host.evaluate((window) => {
+    window.restore()
+    window.show()
+    window.focus()
   })
   await expect
     .poll(() =>
-      electronApp.evaluate(({ BrowserWindow }) => {
-        const host = BrowserWindow.getAllWindows().find(
-          (window) => !window.webContents.getURL().includes('web-index')
-        )
-        return host?.isMinimized() ?? false
-      })
+      host.evaluate((window) => ({
+        backgroundThrottling: window.webContents.getBackgroundThrottling(),
+        minimized: window.isMinimized(),
+        visible: window.isVisible()
+      }))
+    )
+    .toEqual({ backgroundThrottling: true, minimized: false, visible: true })
+  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('visible')
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  )
+}
+
+async function showHeadedClient(electronApp: ElectronApplication, page: Page): Promise<void> {
+  const clientWindow = await electronApp.browserWindow(page)
+  await clientWindow.evaluate((window) => {
+    window.show()
+    window.focus()
+  })
+  await expect.poll(() => clientWindow.evaluate((window) => window.isVisible())).toBe(true)
+}
+
+function countForegroundPixels(buffer: Buffer): number {
+  const image = PNG.sync.read(buffer)
+  const buckets = new Map<string, { count: number; red: number; green: number; blue: number }>()
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    if ((image.data[offset + 3] ?? 0) < 128) {
+      continue
+    }
+    const red = image.data[offset] ?? 0
+    const green = image.data[offset + 1] ?? 0
+    const blue = image.data[offset + 2] ?? 0
+    const key = `${red >> 3},${green >> 3},${blue >> 3}`
+    const bucket = buckets.get(key) ?? { count: 0, red, green, blue }
+    bucket.count += 1
+    buckets.set(key, bucket)
+  }
+  const background = [...buckets.values()].sort((a, b) => b.count - a.count)[0]
+  if (!background) {
+    return 0
+  }
+  let foregroundPixels = 0
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    if ((image.data[offset + 3] ?? 0) < 128) {
+      continue
+    }
+    const distance =
+      Math.abs((image.data[offset] ?? 0) - background.red) +
+      Math.abs((image.data[offset + 1] ?? 0) - background.green) +
+      Math.abs((image.data[offset + 2] ?? 0) - background.blue)
+    if (distance > 48) {
+      foregroundPixels += 1
+    }
+  }
+  return foregroundPixels
+}
+
+function countVisualMarkerPixels(buffer: Buffer): number {
+  const image = PNG.sync.read(buffer)
+  let count = 0
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const red = image.data[offset] ?? 0
+    const green = image.data[offset + 1] ?? 0
+    const blue = image.data[offset + 2] ?? 0
+    if (
+      (image.data[offset + 3] ?? 0) >= 245 &&
+      blue >= 100 &&
+      blue - red >= 50 &&
+      blue - green >= 20 &&
+      green - red >= 10
+    ) {
+      count += 1
+    }
+  }
+  return count
+}
+
+async function findHostPaneWithMarker(
+  page: Page,
+  marker: string
+): Promise<{ paneId: number; ptyId: string; tabId: string }> {
+  let target: { paneId: number; ptyId: string; tabId: string } | null = null
+  await expect
+    .poll(
+      async () => {
+        target = await page.evaluate((expectedMarker) => {
+          for (const [tabId, manager] of window.__paneManagers?.entries() ?? []) {
+            for (const pane of manager.getPanes?.() ?? []) {
+              const content = pane.serializeAddon?.serialize?.() ?? ''
+              const ptyId = pane.container?.dataset?.ptyId
+              if (content.includes(expectedMarker) && ptyId) {
+                return { paneId: pane.id, ptyId, tabId }
+              }
+            }
+          }
+          return null
+        }, marker)
+        return target !== null
+      },
+      { timeout: 30_000, message: 'host renderer never mirrored the paired terminal marker' }
     )
     .toBe(true)
-  // Why: measure steady-state background publication, not the native minimize transition.
-  await electronApp.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1_000)))
+  if (!target) {
+    throw new Error('Host terminal marker target disappeared')
+  }
+  return target
 }
 
 test('restarts one ACK-starved paired terminal stream without replacing its PTY @headful', async ({
   electronApp,
   orcaPage
-}) => {
-  test.setTimeout(120_000)
+}, testInfo) => {
+  test.setTimeout(150_000)
   const liveMarker = `PAIRED_STALL_RECOVERED_${Date.now()}`
   const worktree = await orcaPage.evaluate(() => {
     const state = window.__store?.getState()
@@ -157,6 +265,8 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       .toBe(true)
     const observerOffer = await createRuntimeDesktopPairingOffer(orcaPage)
     observer = await launchPairedWebClient(electronApp, observerOffer)
+    await showHeadedClient(electronApp, client.page)
+    await showHeadedClient(electronApp, observer.page)
     await expect
       .poll(
         () =>
@@ -172,7 +282,7 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       )
       .toBe(true)
     const connectedIdleResources = await getAppResourceProxies(electronApp)
-    await minimizeHeadedHost(electronApp)
+    await minimizeHeadedHost(electronApp, orcaPage)
     const createStartedAt = performance.now()
     const created = await callRuntime<{
       tab: { id: string; parentTabId: string; terminal: string | null }
@@ -353,6 +463,42 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       .toContain(`LIVE:${liveMarker}`)
     expect(await waitForActivePanePtyId(observer.page, 30_000)).toBe(observerOriginalPtyId)
 
+    await restoreHeadedHost(electronApp, orcaPage)
+    await orcaPage.evaluate(
+      (worktreeId) => window.__store?.getState().setActiveWorktree(worktreeId),
+      worktree.id
+    )
+    const hostTab = orcaPage.locator(
+      `[data-testid="sortable-tab"][data-tab-id="${created.tab.parentTabId}"]`
+    )
+    await expect(hostTab).toBeVisible({ timeout: 30_000 })
+    await hostTab.click()
+    const hostPane = await findHostPaneWithMarker(orcaPage, `LIVE:${liveMarker}`)
+    expect(hostPane.tabId).toBe(created.tab.parentTabId)
+    await orcaPage.evaluate(({ paneId, tabId }) => {
+      const manager = window.__paneManagers?.get(tabId)
+      manager?.setActivePane?.(paneId, { focus: true })
+    }, hostPane)
+    await expect
+      .poll(() => getTerminalContent(orcaPage), { timeout: 30_000 })
+      .toContain(`LIVE:${liveMarker}`)
+    const restoredTerminalScreenshot = await orcaPage
+      .locator(
+        `[data-terminal-tab-id="${hostPane.tabId}"] .pane[data-pane-id="${hostPane.paneId}"] .xterm-screen`
+      )
+      .screenshot({ animations: 'disabled' })
+    await testInfo.attach('host-terminal-after-create-restore', {
+      body: restoredTerminalScreenshot,
+      contentType: 'image/png'
+    })
+    expect(
+      countVisualMarkerPixels(restoredTerminalScreenshot),
+      'host terminal marker did not repaint after the background publication toggle'
+    ).toBeGreaterThan(500)
+
+    await minimizeHeadedHost(electronApp, orcaPage)
+    await showHeadedClient(electronApp, observer.page)
+
     const authoritativeInventory = await callRuntime<{
       tabs: { id: string; parentTabId?: string; terminal?: string | null }[]
     }>(client.page, 'session.tabs.list', { worktree: `id:${worktree.id}` })
@@ -402,6 +548,17 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
       .toEqual([false, false, false])
     terminal = null
 
+    await restoreHeadedHost(electronApp, orcaPage)
+    const restoredHostScreenshot = await orcaPage.screenshot({ fullPage: true })
+    expect(
+      countForegroundPixels(restoredHostScreenshot),
+      'host compositor remained blank after the background close toggle'
+    ).toBeGreaterThan(1_000)
+    await testInfo.attach('host-window-after-close-restore', {
+      body: restoredHostScreenshot,
+      contentType: 'image/png'
+    })
+
     const afterPublicationResources = await getAppResourceProxies(electronApp)
     const evidencePath = test.info().outputPath('publication-evidence.json')
     writeFileSync(
@@ -412,7 +569,8 @@ test('restarts one ACK-starved paired terminal stream without replacing its PTY 
           closeLatencyMs,
           connectedIdleResources,
           createLatencyMs,
-          hostMinimized: true,
+          hostMinimizedDuringCreateAndClose: true,
+          hostRestoredAfterEachPublication: true,
           noClientResources
         },
         null,
