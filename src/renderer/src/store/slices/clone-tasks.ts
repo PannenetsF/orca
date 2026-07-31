@@ -110,7 +110,12 @@ export const createCloneTaskSlice: StateCreator<AppState, [], [], CloneTaskSlice
           ? s.cloneTasksById[match.taskId]
           : 'localOrSsh' in match
             ? findActiveLocalOrSshCloneTask(s.cloneTasksById)
-            : findActiveCloneTask(s.cloneTasksById, match.backend, match.destination, match.environmentId)
+            : findActiveCloneTask(
+                s.cloneTasksById,
+                match.backend,
+                match.destination,
+                match.environmentId
+              )
       if (!entry || entry.status !== 'cloning') {
         return {}
       }
@@ -135,17 +140,32 @@ export const createCloneTaskSlice: StateCreator<AppState, [], [], CloneTaskSlice
   },
 
   backgroundCloneTask: (taskId) => {
+    const entry = get().cloneTasksById[taskId]
+    if (!entry || entry.backgrounded || entry.status === 'error') {
+      // Why: a failed clone stays dialog-owned until dismissed; nothing to hand off.
+      return
+    }
+    // Why: runCloneTask can win the race and mark the task 'success' before the
+    // dialog closes. runCloneTask skipped notifyCloneComplete because the task
+    // wasn't backgrounded yet, and the dialog cleared activeTaskId so its
+    // navigation effect won't fire — so the handoff must ping the user here, or
+    // the finished task leaks with no row, no toast, and no navigation.
+    const alreadyFinished = entry.status === 'success'
     set((s) => {
-      const entry = s.cloneTasksById[taskId]
-      // Why: a task that already resolved before the dialog closed shouldn't
-      // pop a stale sidebar row — only surface still-running clones.
-      if (!entry || entry.status !== 'cloning' || entry.backgrounded) {
+      const current = s.cloneTasksById[taskId]
+      if (!current || current.backgrounded) {
         return {}
       }
       return {
-        cloneTasksById: { ...s.cloneTasksById, [taskId]: { ...entry, backgrounded: true } }
+        cloneTasksById: { ...s.cloneTasksById, [taskId]: { ...current, backgrounded: true } }
       }
     })
+    if (alreadyFinished) {
+      const backgrounded = get().cloneTasksById[taskId]
+      if (backgrounded?.status === 'success' && backgrounded.repoId) {
+        notifyCloneComplete(backgrounded.displayName)
+      }
+    }
   },
 
   dismissCloneTask: (taskId) => {
@@ -227,7 +247,7 @@ async function runCloneTask(
     // finishing while its dialog is open already navigates and toasts inline.
     const finished = get().cloneTasksById[task.id]
     if (finished?.backgrounded) {
-      notifyCloneComplete(repo)
+      notifyCloneComplete(repo.displayName)
     }
   } catch (err) {
     if (!get().cloneTasksById[task.id]) {
@@ -252,7 +272,7 @@ async function runCloneTask(
 async function cloneWithBackend(task: CloneTask): Promise<Repo> {
   if (task.backend === 'ssh') {
     return (await window.api.repos.cloneRemote({
-      connectionId: task.connectionId as string,
+      connectionId: requireCloneTaskField(task, 'connectionId'),
       url: task.url,
       destination: task.destination
     })) as Repo
@@ -260,7 +280,7 @@ async function cloneWithBackend(task: CloneTask): Promise<Repo> {
   if (task.backend === 'environment') {
     const target: RuntimeClientTarget = {
       kind: 'environment',
-      environmentId: task.environmentId as string
+      environmentId: requireCloneTaskField(task, 'environmentId')
     }
     const result = await callRuntimeRpc<{ repo: Repo }>(
       target,
@@ -278,7 +298,7 @@ async function abortCloneBackend(task: CloneTask): Promise<void> {
     if (task.backend === 'environment') {
       const target: RuntimeClientTarget = {
         kind: 'environment',
-        environmentId: task.environmentId as string
+        environmentId: requireCloneTaskField(task, 'environmentId')
       }
       await callRuntimeRpc(target, 'repo.cloneAbort', { destination: task.destination })
       return
@@ -290,17 +310,28 @@ async function abortCloneBackend(task: CloneTask): Promise<void> {
   }
 }
 
-function notifyCloneComplete(repo: Repo): void {
+// Why: connectionId/environmentId are optional on CloneTask but required for
+// their backend. Surface a clear invariant violation instead of forwarding
+// `undefined` through a silent `as string` cast into an opaque IPC/RPC error.
+function requireCloneTaskField(task: CloneTask, field: 'connectionId' | 'environmentId'): string {
+  const value = task[field]
+  if (!value) {
+    throw new Error(`Clone task ${task.id} (${task.backend}) is missing ${field}`)
+  }
+  return value
+}
+
+function notifyCloneComplete(repoLabel: string): void {
   toast.success(translate('auto.store.slices.cloneTasks.cloneSucceeded', 'Repository cloned'), {
-    description: repo.displayName
+    description: repoLabel
   })
   // Why: main process gates on window visibility and lights the tray dot; a
   // backgrounded clone that finishes while Orca is hidden still reaches the user.
   void window.api.notifications
     .dispatch({
       source: 'clone-complete',
-      repoLabel: repo.displayName,
-      worktreeLabel: repo.displayName
+      repoLabel,
+      worktreeLabel: repoLabel
     })
     .catch(() => {
       // Best effort: an unsupported/disabled notification path must not break the clone.
