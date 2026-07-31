@@ -58,13 +58,9 @@ describe('RemoteClientRendererThrottle', () => {
     expect(throttle.activeClientCount).toBe(0)
   })
 
-  it('reapply installs the serving state onto a freshly attached window', () => {
+  it('reapply reinstalls the serving state onto the current target', () => {
     const target = createTarget()
     const throttle = new RemoteClientRendererThrottle(() => target)
-
-    // Why: the client authenticated before the window existed (no target yet).
-    const detachedThrottle = new RemoteClientRendererThrottle(() => null)
-    detachedThrottle.onRemoteClientConnected()
 
     throttle.onRemoteClientConnected()
     target.calls.length = 0

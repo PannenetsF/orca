@@ -1,13 +1,8 @@
-// Why: the host renderer publishes new terminal surfaces and tab snapshots to a
-// paired client through setTimeout-coalesced graph syncs (see
-// src/renderer/src/runtime/sync-runtime-graph.ts). Electron background-throttles
-// a hidden/occluded window's renderer on every platform, so a remote host left
-// in the background stalls session open/close for its paired client — the 10s
-// "Timed out waiting for terminal surface after creation" host deadline — even
-// though main-process PTY I/O (live keystrokes) stays fast. Keep the renderer
-// unthrottled while at least one remote client is connected, and restore the
-// throttled default once the last one disconnects so an unattended host still
-// saves power.
+// Why: a backgrounded host renderer is Electron-throttled, stalling the
+// setTimeout-coalesced graph syncs that publish terminal surfaces to a paired
+// client (its create/close deadline) while main-process PTY I/O stays fast.
+// Keep the renderer unthrottled while a remote client is connected; restore the
+// power-saving default once the last one leaves.
 
 export type BackgroundThrottleTarget = {
   setBackgroundThrottling: (allowed: boolean) => void
