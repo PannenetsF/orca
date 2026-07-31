@@ -1170,9 +1170,6 @@ export class OrcaRuntimeRpcServer {
               // buffer-owning host's runtime, so a remote runtime proxy may
               // legitimately lack this method (its own server activates it).
               this.runtime.activateRecentPtyPathCandidateTracking?.()
-              // Why: keep the authoritative renderer unthrottled while serving so
-              // graph-sync-backed session create/close doesn't stall in the background.
-              this.runtime.onRemoteClientConnected?.()
               this.mobileRelayPairingProvider?.onDemandStateChanged?.()
             },
             onClose: (socket, hasOtherConnections) => {
@@ -1180,9 +1177,6 @@ export class OrcaRuntimeRpcServer {
                 return
               }
               this.abortWebSocketDispatches(socket.ws)
-              // Why: only authenticated sockets reach here (onReady fired), so the
-              // serving-client counter stays balanced with onRemoteClientConnected.
-              this.runtime.onRemoteClientDisconnected?.()
               // Why: subscriptions and binary streams are socket-scoped, but disconnect state is device-scoped across transports.
               this.runtime.cleanupSubscriptionsForConnection(socket.connectionId)
               this.runtime.cancelMobileDictationForConnection(socket.connectionId)

@@ -298,8 +298,7 @@ export function createMainWindow(
 
   if (process.platform === 'darwin') {
     // Why: preserve hidden-window power savings; stable native sizing and frame-only invalidation
-    // make wake recovery independent of the throttled viewport. RemoteClientRendererThrottle lifts
-    // this while a paired client is connected so graph-sync session create/close stays responsive.
+    // make wake recovery independent of the throttled viewport.
     mainWindow.webContents.setBackgroundThrottling(true)
     installMacosVisibilityRepaint(mainWindow)
   }
