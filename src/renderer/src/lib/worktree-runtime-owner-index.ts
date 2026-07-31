@@ -156,6 +156,22 @@ function worktreeOwnerIdentity(owner: WorktreeOwnerRecord): string {
   ])
 }
 
+function addWorktreeOwnerIndexEntry(
+  index: Map<string, IndexedWorktreeOwnerResolution>,
+  key: string,
+  owner: WorktreeOwnerRecord
+): void {
+  const current = index.get(key)
+  if (!current) {
+    index.set(key, { kind: 'resolved', owner })
+  } else if (
+    current.kind === 'resolved' &&
+    worktreeOwnerIdentity(current.owner) !== worktreeOwnerIdentity(owner)
+  ) {
+    index.set(key, { kind: 'ambiguous' })
+  }
+}
+
 function worktreeOwnerHostIds(owner: WorktreeOwnerRecord): ExecutionHostId[] {
   const physicalHostId = parseExecutionHostId(owner.hostId)?.id
   const runtimeEnvironmentId = owner.runtimeOwnerEnvironmentId?.trim()
@@ -182,20 +198,9 @@ export function resolveIndexedWorktreeOwner(
     for (const worktrees of Object.values(worktreesByRepo)) {
       for (const worktree of worktrees) {
         const id = worktree.id
-        const current = next.get(id)
-        if (!current) {
-          next.set(id, { kind: 'resolved', owner: worktree })
-        } else if (
-          current.kind === 'resolved' &&
-          worktreeOwnerIdentity(current.owner) !== worktreeOwnerIdentity(worktree)
-        ) {
-          next.set(id, { kind: 'ambiguous' })
-        }
+        addWorktreeOwnerIndexEntry(next, id, worktree)
         for (const hostId of worktreeOwnerHostIds(worktree)) {
-          next.set(`${id}\0${hostId}`, {
-            kind: 'resolved',
-            owner: worktree
-          })
+          addWorktreeOwnerIndexEntry(next, `${id}\0${hostId}`, worktree)
         }
       }
     }
