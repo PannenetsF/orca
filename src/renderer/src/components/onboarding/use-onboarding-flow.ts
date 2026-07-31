@@ -280,6 +280,7 @@ export function useOnboardingFlow(
   const [nestedScanInProgress, setNestedScanInProgress] = useState(false)
   const [nestedImportScanId, setNestedImportScanId] = useState<string | null>(null)
   const nestedScanIdRef = useRef<string | null>(null)
+  const nestedScanRuntimeEnvironmentIdRef = useRef<string | null>(null)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -719,7 +720,9 @@ export function useOnboardingFlow(
         return
       }
       setError(null)
-      if (settings?.activeRuntimeEnvironmentId?.trim()) {
+      // Why: the scan, add, import, and cancel must keep one host even if global selection changes.
+      const runtimeEnvironmentId = settings?.activeRuntimeEnvironmentId?.trim() || null
+      if (runtimeEnvironmentId) {
         const path = serverPath.trim()
         if (!path) {
           const message = 'Enter a path on the selected host.'
@@ -731,7 +734,8 @@ export function useOnboardingFlow(
         try {
           if (kind === 'git') {
             const attemptId = createNestedRepoTelemetryAttemptId()
-            const scan = await scanNestedRepos(path)
+            nestedScanRuntimeEnvironmentIdRef.current = runtimeEnvironmentId
+            const scan = await scanNestedRepos(path, undefined, { runtimeEnvironmentId })
             track(
               'add_repo_nested_scan_result',
               buildNestedRepoScanTelemetry({
@@ -747,7 +751,7 @@ export function useOnboardingFlow(
             }
           }
           setBusyLabel(kind === 'git' ? 'Opening project…' : 'Opening folder…')
-          const repo = await addRepoPath(path, kind)
+          const repo = await addRepoPath(path, kind, { runtimeEnvironmentId })
           if (!repo) {
             track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
             return
@@ -777,8 +781,10 @@ export function useOnboardingFlow(
           const attemptId = createNestedRepoTelemetryAttemptId()
           const scanId = createNestedRepoScanId()
           nestedScanIdRef.current = scanId
+          nestedScanRuntimeEnvironmentIdRef.current = null
           setNestedScanInProgress(true)
           const scan = await scanNestedRepos(path, undefined, {
+            runtimeEnvironmentId: null,
             scanId,
             onProgress: (progressScan) => {
               if (
@@ -877,6 +883,7 @@ export function useOnboardingFlow(
         // Why: Set insertion order can drift after deselect/reselect; match the visible scan order users reviewed.
         projectPaths: selectedProjectPaths,
         ...(nestedImportScanId ? { scanId: nestedImportScanId } : {}),
+        runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current,
         mode
       })
       track(
@@ -962,6 +969,7 @@ export function useOnboardingFlow(
     setNestedScanInProgress(false)
     setNestedImportScanId(null)
     nestedScanIdRef.current = null
+    nestedScanRuntimeEnvironmentIdRef.current = null
     setBusyLabel(null)
     setError(null)
   }, [
@@ -978,7 +986,9 @@ export function useOnboardingFlow(
       return
     }
     if (nestedScanInProgress && nestedScanIdRef.current) {
-      void cancelNestedRepoScan(nestedScanIdRef.current)
+      void cancelNestedRepoScan(nestedScanIdRef.current, {
+        runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current
+      })
     }
     trackNestedBackAndClear()
   }, [busyLabel, cancelNestedRepoScan, nestedScanInProgress, trackNestedBackAndClear])
@@ -988,7 +998,9 @@ export function useOnboardingFlow(
     if (!scanId) {
       return
     }
-    void cancelNestedRepoScan(scanId)
+    void cancelNestedRepoScan(scanId, {
+      runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current
+    })
   }, [cancelNestedRepoScan])
 
   const canImportNestedForTelemetry = useCallback((): boolean => {
