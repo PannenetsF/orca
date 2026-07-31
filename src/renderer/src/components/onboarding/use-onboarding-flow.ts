@@ -31,14 +31,7 @@ import { persistStep, useCloseWith, usePersistCurrentStep } from './use-onboardi
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { buildOnboardingFolderAgentStartup } from '@/lib/onboarding-folder-agent-startup'
 import { resolveOnboardingSettingsHydration } from './onboarding-settings-hydration'
-import {
-  getProjectWorktreesForHost,
-  openProjectDefaultCheckout
-} from '../sidebar/project-added-default-checkout'
-import {
-  capturedAddRepoExecutionHostId,
-  worktreeRefreshOptions
-} from '../sidebar/add-repo-runtime-owner'
+import { openProjectDefaultCheckout } from '../sidebar/project-added-default-checkout'
 import { translate } from '@/i18n/i18n'
 import { resolveAgentPermissionModeSummary } from '../../../../shared/tui-agent-permissions'
 import { isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
@@ -287,7 +280,6 @@ export function useOnboardingFlow(
   const [nestedScanInProgress, setNestedScanInProgress] = useState(false)
   const [nestedImportScanId, setNestedImportScanId] = useState<string | null>(null)
   const nestedScanIdRef = useRef<string | null>(null)
-  const nestedScanRuntimeEnvironmentIdRef = useRef<string | null>(null)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -544,36 +536,23 @@ export function useOnboardingFlow(
   })
 
   const completeRepo = useCallback(
-    async (
-      projectId: string,
-      isGit: boolean,
-      path: 'open_folder' | 'clone_url',
-      runtimeEnvironmentId: string | null
-    ) => {
-      const executionHostId = capturedAddRepoExecutionHostId(runtimeEnvironmentId)!
-      await fetchRepos({ runtimeEnvironmentId })
+    async (projectId: string, isGit: boolean, path: 'open_folder' | 'clone_url') => {
+      await fetchRepos()
       // Why: a non-authoritative Git refresh should still complete onboarding onto the project row as a fallback.
-      await fetchWorktrees(
-        projectId,
-        isGit ? worktreeRefreshOptions(runtimeEnvironmentId) : { executionHostId }
-      )
-      const worktrees = getProjectWorktreesForHost(
-        useAppStore.getState().worktreesByRepo[projectId] ?? [],
-        executionHostId
-      )
+      await fetchWorktrees(projectId, isGit ? { requireAuthoritative: true } : undefined)
+      const worktrees = useAppStore.getState().worktreesByRepo[projectId] ?? []
       if (isGit) {
         await openProjectDefaultCheckout({
           repoId: projectId,
           source: path === 'clone_url' ? 'onboarding_clone_url' : 'onboarding_open_folder',
-          setHideDefaultBranchWorkspace,
-          executionHostId
+          setHideDefaultBranchWorkspace
         })
       } else {
         const worktree = worktrees[0] ?? null
         if (worktree) {
           // Why: non-git folders skip the composer, so seed their first terminal with the chosen default agent here.
           const startup = buildOnboardingFolderAgentStartup(settings)
-          activateAndRevealWorktree(worktree.id, { startup, executionHostId })
+          activateAndRevealWorktree(worktree.id, { startup })
         }
       }
       // Why: next() short-circuits the repo step; emit step_completed here, gated on closeWith success so a persistence failure can't double-count.
@@ -740,9 +719,7 @@ export function useOnboardingFlow(
         return
       }
       setError(null)
-      // Why: the scan, add, import, and cancel must keep one host even if global selection changes.
-      const runtimeEnvironmentId = settings?.activeRuntimeEnvironmentId?.trim() || null
-      if (runtimeEnvironmentId) {
+      if (settings?.activeRuntimeEnvironmentId?.trim()) {
         const path = serverPath.trim()
         if (!path) {
           const message = 'Enter a path on the selected host.'
@@ -754,8 +731,7 @@ export function useOnboardingFlow(
         try {
           if (kind === 'git') {
             const attemptId = createNestedRepoTelemetryAttemptId()
-            nestedScanRuntimeEnvironmentIdRef.current = runtimeEnvironmentId
-            const scan = await scanNestedRepos(path, undefined, { runtimeEnvironmentId })
+            const scan = await scanNestedRepos(path)
             track(
               'add_repo_nested_scan_result',
               buildNestedRepoScanTelemetry({
@@ -771,12 +747,12 @@ export function useOnboardingFlow(
             }
           }
           setBusyLabel(kind === 'git' ? 'Opening project…' : 'Opening folder…')
-          const repo = await addRepoPath(path, kind, { runtimeEnvironmentId })
+          const repo = await addRepoPath(path, kind)
           if (!repo) {
             track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
             return
           }
-          await completeRepo(repo.id, isGitRepoKind(repo), 'open_folder', runtimeEnvironmentId)
+          await completeRepo(repo.id, isGitRepoKind(repo), 'open_folder')
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err))
           track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
@@ -801,10 +777,8 @@ export function useOnboardingFlow(
           const attemptId = createNestedRepoTelemetryAttemptId()
           const scanId = createNestedRepoScanId()
           nestedScanIdRef.current = scanId
-          nestedScanRuntimeEnvironmentIdRef.current = null
           setNestedScanInProgress(true)
           const scan = await scanNestedRepos(path, undefined, {
-            runtimeEnvironmentId: null,
             scanId,
             onProgress: (progressScan) => {
               if (
@@ -840,7 +814,7 @@ export function useOnboardingFlow(
         if ('error' in result) {
           throw new Error(result.error)
         }
-        await completeRepo(result.repo.id, isGitRepoKind(result.repo), 'open_folder', null)
+        await completeRepo(result.repo.id, isGitRepoKind(result.repo), 'open_folder')
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
         track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'invalid_path' })
@@ -903,7 +877,6 @@ export function useOnboardingFlow(
         // Why: Set insertion order can drift after deselect/reselect; match the visible scan order users reviewed.
         projectPaths: selectedProjectPaths,
         ...(nestedImportScanId ? { scanId: nestedImportScanId } : {}),
-        runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current,
         mode
       })
       track(
@@ -932,12 +905,9 @@ export function useOnboardingFlow(
       }
       for (const importedRepoId of importedRepoIds) {
         // Why: imported repos are already persisted, so a non-authoritative SSH refresh shouldn't block revealing the first project.
-        await fetchWorktrees(
-          importedRepoId,
-          worktreeRefreshOptions(nestedScanRuntimeEnvironmentIdRef.current)
-        )
+        await fetchWorktrees(importedRepoId, { requireAuthoritative: true })
       }
-      await completeRepo(projectId, true, 'open_folder', nestedScanRuntimeEnvironmentIdRef.current)
+      await completeRepo(projectId, true, 'open_folder')
     } catch (err) {
       if (!resultTracked) {
         track(
@@ -992,7 +962,6 @@ export function useOnboardingFlow(
     setNestedScanInProgress(false)
     setNestedImportScanId(null)
     nestedScanIdRef.current = null
-    nestedScanRuntimeEnvironmentIdRef.current = null
     setBusyLabel(null)
     setError(null)
   }, [
@@ -1009,9 +978,7 @@ export function useOnboardingFlow(
       return
     }
     if (nestedScanInProgress && nestedScanIdRef.current) {
-      void cancelNestedRepoScan(nestedScanIdRef.current, {
-        runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current
-      })
+      void cancelNestedRepoScan(nestedScanIdRef.current)
     }
     trackNestedBackAndClear()
   }, [busyLabel, cancelNestedRepoScan, nestedScanInProgress, trackNestedBackAndClear])
@@ -1021,9 +988,7 @@ export function useOnboardingFlow(
     if (!scanId) {
       return
     }
-    void cancelNestedRepoScan(scanId, {
-      runtimeEnvironmentId: nestedScanRuntimeEnvironmentIdRef.current
-    })
+    void cancelNestedRepoScan(scanId)
   }, [cancelNestedRepoScan])
 
   const canImportNestedForTelemetry = useCallback((): boolean => {
@@ -1065,12 +1030,7 @@ export function useOnboardingFlow(
               url: trimmed,
               destination
             })
-      await completeRepo(
-        repo.id,
-        true,
-        'clone_url',
-        target.kind === 'environment' ? target.environmentId : null
-      )
+      await completeRepo(repo.id, true, 'clone_url')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       track('onboarding_step4_path_failed', { path: 'clone_url', reason: 'clone_failed' })
