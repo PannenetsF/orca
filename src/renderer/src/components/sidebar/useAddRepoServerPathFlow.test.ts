@@ -148,9 +148,8 @@ describe('useAddRepoServerPathFlow', () => {
   })
 
   it('treats an all-whitespace runtime id as local for both the scan and the add', async () => {
-    // Why: the telemetry guard trims the id but the scan/add selectors used to
-    // forward it untrimmed, so a whitespace id disagreed — routing local for
-    // telemetry while sending whitespace to the RPC. Both must resolve to null.
+    // Why: a whitespace-only id must resolve to null so the scan and add route
+    // as local, not forward whitespace to the RPC selector.
     mocks.getNestedRepoRuntimeKind.mockReturnValue('local')
     mocks.scanNestedRepos.mockResolvedValue({
       selectedPath: '/workspace/torch',
@@ -185,8 +184,7 @@ describe('useAddRepoServerPathFlow', () => {
     })
     await result.handleAddServerPath('git')
 
-    // Resolved to local, so a streaming scan (scanId) is supplied — not the
-    // no-stream runtime path — and the RPC selector gets null, not whitespace.
+    // Local routing supplies a streaming scanId and a null RPC selector.
     const scanArgs = mocks.scanNestedRepos.mock.calls[0]
     expect(scanArgs[0]).toBe('/workspace/torch')
     expect(scanArgs[2].runtimeEnvironmentId).toBeNull()
