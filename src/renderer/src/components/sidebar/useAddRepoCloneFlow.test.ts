@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
     dismissCloneTask: vi.fn()
   },
   pickDirectory: vi.fn(),
-  fetchWorktrees: vi.fn(),
   onGitRepoReady: vi.fn()
 }))
 
@@ -111,7 +110,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: null,
       sshTargetId: 'ssh-1',
       workspaceDir: '/local/workspace',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
     await result.handleClone()
@@ -133,7 +131,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: 'env-1',
       sshTargetId: null,
       workspaceDir: '/local/workspace',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
     await result.handleClone()
@@ -155,7 +152,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: null,
       sshTargetId: null,
       workspaceDir: '/local/workspace',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
     await result.handleClone()
@@ -193,7 +189,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: null,
       sshTargetId: null,
       workspaceDir: '/local/workspace',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
 
@@ -212,7 +207,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: null,
       sshTargetId: 'ssh-1',
       workspaceDir: '/private/tmp/orca-setup-e2e.hOWO1f',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
 
@@ -229,7 +223,6 @@ describe('useAddRepoCloneFlow', () => {
       activeRuntimeEnvironmentId: null,
       sshTargetId: null,
       workspaceDir: '/local/workspace',
-      fetchWorktrees: mocks.fetchWorktrees,
       onGitRepoReady: mocks.onGitRepoReady
     })
     result.resetCloneFlow()

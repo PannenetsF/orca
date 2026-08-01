@@ -249,6 +249,30 @@ describe('clone-tasks slice', () => {
     )
   })
 
+  it('notifies with the confirmed repo name, not the URL-derived name, on the deferred path', async () => {
+    // Why: destination folder name can differ from the URL's last segment, so the
+    // deferred handoff must read the synced repo.displayName, not the stale label.
+    const repo = makeRepo({ displayName: 'actual-repo-name' })
+    clone.mockResolvedValue(repo)
+    const store = seedCloneStore()
+    const taskId = store.getState().startCloneTask({
+      url: 'https://example.com/url-derived.git',
+      destination: '/dest',
+      backend: 'local'
+    })
+
+    await vi.waitFor(() => {
+      expect(store.getState().cloneTasksById[taskId]?.status).toBe('success')
+    })
+    expect(store.getState().cloneTasksById[taskId]?.displayName).toBe('actual-repo-name')
+
+    store.getState().backgroundCloneTask(taskId)
+
+    expect(notificationsDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'clone-complete', repoLabel: 'actual-repo-name' })
+    )
+  })
+
   it('does not background or notify a failed clone on dialog close', async () => {
     clone.mockRejectedValue(new Error('network down'))
     const store = seedCloneStore()

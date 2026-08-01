@@ -239,7 +239,15 @@ async function runCloneTask(
       return {
         cloneTasksById: {
           ...s.cloneTasksById,
-          [task.id]: { ...entry, status: 'success', percent: 100, repoId: repo.id }
+          // Why: sync displayName to the real repo name so the deferred
+          // backgroundCloneTask notify path reads the same confirmed label.
+          [task.id]: {
+            ...entry,
+            status: 'success',
+            percent: 100,
+            repoId: repo.id,
+            displayName: repo.displayName
+          }
         }
       }
     })
@@ -247,7 +255,7 @@ async function runCloneTask(
     // finishing while its dialog is open already navigates and toasts inline.
     const finished = get().cloneTasksById[task.id]
     if (finished?.backgrounded) {
-      notifyCloneComplete(repo.displayName)
+      notifyCloneComplete(finished.displayName)
     }
   } catch (err) {
     if (!get().cloneTasksById[task.id]) {
