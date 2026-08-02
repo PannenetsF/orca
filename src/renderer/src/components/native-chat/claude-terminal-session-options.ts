@@ -39,9 +39,14 @@ function parseClaudeModelName(row: string | null): string | null {
   if (!row.includes('·') && !CLAUDE_MODEL_EFFORT.test(row)) {
     return null
   }
-  const beforeBilling = row.split('·')[0] ?? row
+  // split always yields a non-empty first segment for a non-empty row.
+  const beforeBilling = row.split('·')[0]!
   const effort = beforeBilling.match(CLAUDE_MODEL_EFFORT)
-  const name = (effort ? beforeBilling.slice(0, effort.index) : beforeBilling).trim()
+  // effort.index is only undefined for a global regex; guard it anyway so a
+  // stray undefined can't make slice() return the whole string with the suffix.
+  const name = (
+    effort ? beforeBilling.slice(0, effort.index ?? beforeBilling.length) : beforeBilling
+  ).trim()
   return name || null
 }
 
