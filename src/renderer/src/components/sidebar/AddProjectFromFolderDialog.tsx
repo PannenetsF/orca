@@ -58,6 +58,8 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
     openModal('confirm-non-git-folder', {
       folderPath,
       ...(connectionId ? { connectionId } : {}),
+      // Absence === local: NonGitFolderDialog coerces a missing/empty
+      // runtimeEnvironmentId to null, so omitting the spread signals local.
       ...(runtimeEnvironmentId ? { runtimeEnvironmentId } : {})
     })
   }, [closeModal, connectionId, folderPath, openModal, runtimeEnvironmentId])

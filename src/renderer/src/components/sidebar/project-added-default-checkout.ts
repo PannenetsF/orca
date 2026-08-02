@@ -30,6 +30,8 @@ function getProjectWorktreesForHost<T extends Worktree>(
       if (worktree.runtimeOwnerEnvironmentId) {
         return worktree.runtimeOwnerEnvironmentId === parsedHost.environmentId
       }
+      // Reachable: a colliding repo id can carry a runtime-qualified hostId with
+      // no runtimeOwnerEnvironmentId, so match it against the execution host.
       return worktree.hostId === executionHostId
     }
     if (worktree.runtimeOwnerEnvironmentId) {
