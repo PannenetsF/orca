@@ -10,10 +10,12 @@ type LocalGitExecOptions = {
 type ParsedRemote = { host: string; owner: string; repo: string }
 
 const REPO_REF_CACHE_MAX_ENTRIES = 512
+// Why: bound staleness so an external `git remote set-url` is re-read soon, not held until eviction.
+const REPO_REF_CACHE_TTL_MS = 30_000
 // Why: cache the (stable) parsed remote, NOT the server match — the configured
 // server list changes at runtime (user adds a server), so the host→server match
 // must be re-evaluated every call against the live config.
-const remoteCache = new Map<string, ParsedRemote | null>()
+const remoteCache = new Map<string, { at: number; value: ParsedRemote | null }>()
 
 /** @internal - exposed for tests only */
 export function _resetCustomGitServerRepoRefCache(): void {
@@ -21,7 +23,7 @@ export function _resetCustomGitServerRepoRefCache(): void {
 }
 
 function rememberCacheEntry(cacheKey: string, value: ParsedRemote | null): void {
-  remoteCache.set(cacheKey, value)
+  remoteCache.set(cacheKey, { at: Date.now(), value })
   while (remoteCache.size > REPO_REF_CACHE_MAX_ENTRIES) {
     const oldestKey = remoteCache.keys().next().value
     if (oldestKey === undefined) {
@@ -122,8 +124,10 @@ export async function getCustomGitServerRepoRef(
     return null
   }
   let parsed: ParsedRemote | null
-  if (remoteCache.has(cacheKey)) {
-    parsed = remoteCache.get(cacheKey)!
+  const cached = remoteCache.get(cacheKey)
+  // Treat a stale entry (past its TTL) as a miss so an external origin change is re-read.
+  if (cached && Date.now() - cached.at <= REPO_REF_CACHE_TTL_MS) {
+    parsed = cached.value
   } else {
     try {
       const stdout = await getOriginUrl(repoPath, connectionId, localGitOptions)
