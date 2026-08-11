@@ -74,6 +74,12 @@ function makeRepo(): Repo {
   }
 }
 
+function makeFolderRepo(): Repo {
+  // Why: a folder workspace has a repo but suppresses the repo icon chip, so the
+  // inline project label must not render even though showProjectName is set.
+  return { ...makeRepo(), kind: 'folder' }
+}
+
 // Why: reproduces a project's primary worktree with no session — the title
 // falls back to the branch, so `main`/`master` alone can't tell projects apart.
 function makePrimaryWorktree(overrides: Partial<Worktree> = {}): Worktree {
@@ -153,20 +159,22 @@ describe('WorktreeCard project name (board)', () => {
     expect(projectNameEl()).toBeNull()
   })
 
-  it('does not show the project name for a folder workspace with no repo icon chip', async () => {
+  it('does not show the project name for a folder workspace', async () => {
     const { default: WorktreeCard } = await import('./WorktreeCard')
 
     act(() => {
       root?.render(
         <WorktreeCard
           worktree={makePrimaryWorktree()}
-          repo={undefined}
+          repo={makeFolderRepo()}
           isActive={false}
           showProjectName
         />
       )
     })
 
+    // Why: folder workspaces suppress the repo icon chip, so the inline project
+    // label is gated off with it even though showProjectName is set.
     expect(projectNameEl()).toBeNull()
   })
 })
