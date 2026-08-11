@@ -1265,7 +1265,7 @@ function TerminalPane(
           decide(() => executeClosePane(paneId))
         })
     },
-    [executeClosePane, getCloseDialogCopyKind]
+    [executeClosePane, getCloseDialogCopyKind, worktreeId, tabId]
   )
 
   useImperativeHandle(
