@@ -7,9 +7,7 @@ import type { GlobalSettings } from '../../../../shared/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { RuntimeEnvironmentsPane } from './RuntimeEnvironmentsPane'
 
-// A hostname with no hyphen, slash, or dot break opportunity: `truncate`
-// (white-space: nowrap) makes its min-content width the whole string, which is
-// what pushed the dialog box past `max-w-sm`.
+// No-whitespace endpoint: with `truncate` (nowrap) its min-content width is the whole string, overflowing `max-w-sm`.
 const UNBREAKABLE_ENDPOINT =
   'wss://averylonghostnamewithnobreakopportunitiesatallexample:8443/runtimesocketendpoint'
 
@@ -20,7 +18,9 @@ const ENVIRONMENT = {
   updatedAt: 0,
   lastUsedAt: null,
   runtimeId: null,
-  endpoints: [{ id: 'ep-1', kind: 'websocket' as const, label: 'primary', endpoint: UNBREAKABLE_ENDPOINT }],
+  endpoints: [
+    { id: 'ep-1', kind: 'websocket' as const, label: 'primary', endpoint: UNBREAKABLE_ENDPOINT }
+  ],
   preferredEndpointId: 'ep-1'
 }
 
@@ -49,8 +49,7 @@ vi.mock('./EphemeralVmRuntimesSection', () => ({
   EphemeralVmRuntimesSection: () => null
 }))
 
-// Radix Select never opens in a layout-free DOM; this stub exposes each option
-// as a button so picking a server can drive the Switch confirmation dialog.
+// Radix Select never opens in a layout-free DOM; expose each option as a button so picking a server drives the Switch dialog.
 vi.mock('../ui/select', async () => {
   const React = await import('react')
   const SelectContext = React.createContext<{ onValueChange?: (value: string) => void }>({})
@@ -108,8 +107,8 @@ async function renderPane(
 
 /** The endpoint/name box rendered inside the confirmation dialogs. */
 function findDialogDetailBox(): HTMLElement {
-  const box = [...document.querySelectorAll('[data-slot="dialog-content"] div')].find((node) =>
-    node.className.includes('rounded-md') && node.className.includes('bg-muted/35')
+  const box = [...document.querySelectorAll('[data-slot="dialog-content"] div')].find(
+    (node) => node.className.includes('rounded-md') && node.className.includes('bg-muted/35')
   )
   if (!box) {
     throw new Error('dialog detail box not found')
@@ -151,12 +150,10 @@ describe('RuntimeEnvironmentsPane confirmation dialogs with a long endpoint', ()
     })
 
     const box = findDialogDetailBox()
-    // Without this the grid item's automatic minimum is its min-content width.
     expect(box.className).toContain('min-w-0')
 
     const [nameLine, endpointLine] = [...box.children] as HTMLElement[]
     expect(endpointLine.textContent).toBe(UNBREAKABLE_ENDPOINT)
-    // `truncate` sets nowrap, which is exactly what inflates min-content width.
     for (const line of [nameLine, endpointLine]) {
       expect(line.className).toContain('break-all')
       expect(line.className).not.toContain('truncate')
@@ -177,9 +174,9 @@ describe('RuntimeEnvironmentsPane confirmation dialogs with a long endpoint', ()
       removeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    const confirmButton = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find(
-      (button) => button.textContent?.trim() === 'Remove'
-    )
+    const confirmButton = [
+      ...document.querySelectorAll('[data-slot="dialog-content"] button')
+    ].find((button) => button.textContent?.trim() === 'Remove')
     expect(confirmButton).toBeDefined()
     await act(async () => {
       confirmButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -194,8 +191,7 @@ describe('RuntimeEnvironmentsPane confirmation dialogs with a long endpoint', ()
       }
       return node
     })
-    // The error <p> is its own grid item, so an unbreakable token in the
-    // message widens the dialog just like the endpoint box did.
+    // The error <p> is its own grid item, so an unbreakable token widens the dialog just like the endpoint box.
     expect(error.className).toContain('break-all')
   })
 
@@ -229,9 +225,9 @@ describe('RuntimeEnvironmentsPane confirmation dialogs with a long endpoint', ()
       option?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    const confirmButton = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find(
-      (button) => button.textContent?.trim() === 'Switch'
-    )
+    const confirmButton = [
+      ...document.querySelectorAll('[data-slot="dialog-content"] button')
+    ].find((button) => button.textContent?.trim() === 'Switch')
     expect(confirmButton).toBeDefined()
     await act(async () => {
       confirmButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
