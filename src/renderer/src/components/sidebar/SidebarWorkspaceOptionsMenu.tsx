@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
+import { getLiveSelectedWorkspaceStatusIds } from '../../../../shared/workspace-statuses'
 import { isSleepingSweepExemptionNarrowingList } from './visible-worktrees'
 import SidebarRepositoryFilterSection from './SidebarRepositoryFilterSection'
 import SidebarStatusFilterSection from './SidebarStatusFilterSection'
@@ -85,7 +86,7 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
   // Why derive from the live catalog: a since-deleted custom status must not
   // inflate the count or keep the filter badge lit with no matching lane.
   const selectedStatusCount = useMemo(
-    () => workspaceStatuses.filter((status) => filterWorkspaceStatuses.includes(status.id)).length,
+    () => getLiveSelectedWorkspaceStatusIds(workspaceStatuses, filterWorkspaceStatuses).size,
     [workspaceStatuses, filterWorkspaceStatuses]
   )
   const hasStatusFilter = selectedStatusCount > 0

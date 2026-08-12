@@ -147,4 +147,19 @@ describe('computeVisibleWorktreeIds workspace-status filter', () => {
 
     expect(result).toEqual([repo1Done.id])
   })
+
+  it('fails open: a selected status with no loaded catalog keeps every workspace', () => {
+    // Before the catalog loads every row resolves to the fallback status, so
+    // applying the filter would wrongly hide a non-default selection.
+    const done = withStatus('done', 'completed')
+    const wip = withStatus('wip', 'in-progress')
+
+    const result = computeVisibleWorktreeIds(
+      { repo1: [done, wip] },
+      [done.id, wip.id],
+      visibleOptions({ filterWorkspaceStatuses: ['completed'], workspaceStatuses: undefined })
+    )
+
+    expect(result).toEqual([done.id, wip.id])
+  })
 })

@@ -153,9 +153,9 @@ export function computeVisibleWorktrees(
   // Why guarded on workspaceStatuses: resolving a worktree's effective status
   // needs the live catalog; without it every row would fall back to the
   // default id and silently narrow the list to a single status.
-  if (opts.filterWorkspaceStatuses && opts.filterWorkspaceStatuses.length > 0) {
+  if (opts.filterWorkspaceStatuses?.length && opts.workspaceStatuses) {
     const selectedStatuses = new Set(opts.filterWorkspaceStatuses)
-    const statuses = opts.workspaceStatuses ?? []
+    const statuses = opts.workspaceStatuses
     all = all.filter((w) => selectedStatuses.has(getWorkspaceStatus(w, statuses)))
   }
 
