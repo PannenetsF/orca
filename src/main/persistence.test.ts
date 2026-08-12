@@ -5793,7 +5793,7 @@ describe('Store', () => {
     const deadKey = `r1::${missing('dead')}`
     const recentKey = `r1::${missing('recent')}`
     const sshKey = `ssh-repo::/home/alice/gone`
-    const remoteHostKey = `r1::${missing('remote-host')}`
+    const remoteHostKey = `ssh-repo::${missing('remote-host')}`
     const orphanKey = `removed-repo::${missing('orphan')}`
     const wslKey = `r1::\\\\wsl$\\Ubuntu\\home\\gone`
 
@@ -5932,6 +5932,68 @@ describe('Store', () => {
 
     const hostSession = store.getWorkspaceSession(sshHost)
     expect(hostSession.openFilesByWorktree?.[orphanEditorOnlyKey]).toBeUndefined()
+  })
+
+  it('keeps a live local repo id when the same id was removed on an SSH host (host-scoped orphan detection)', async () => {
+    // Duplicate id across hosts: local `dup` is live, SSH `dup` was removed. The
+    // SSH host-tagged meta and SSH session partition must be swept without
+    // touching the live local twin.
+    const sshHost = toSshExecutionHostId('conn-1')
+    const localKey = `dup::${testState.dir}`
+    const sshKey = 'dup::/home/tiger/gone'
+    writeDataFile({
+      repos: [makeRepo({ id: 'dup', path: testState.dir })],
+      worktreeMeta: {
+        [localKey]: { displayName: '', comment: '', lastActivityAt: 1 },
+        [sshKey]: { displayName: '', comment: '', lastActivityAt: 1, hostId: sshHost }
+      },
+      workspaceSession: {
+        ...getDefaultWorkspaceSession(),
+        lastVisitedAtByWorktreeId: { [localKey]: 5 }
+      },
+      workspaceSessionsByHostId: {
+        [sshHost]: {
+          ...getDefaultWorkspaceSession(),
+          lastVisitedAtByWorktreeId: { [sshKey]: 9 }
+        }
+      }
+    })
+
+    const store = await createStore()
+    const kept = Object.keys(store.getAllWorktreeMeta())
+    expect(kept).toContain(localKey)
+    expect(kept).not.toContain(sshKey)
+    expect(store.getWorkspaceSession().lastVisitedAtByWorktreeId?.[localKey]).toBe(5)
+    expect(
+      store.getWorkspaceSession(sshHost).lastVisitedAtByWorktreeId?.[sshKey]
+    ).toBeUndefined()
+  })
+
+  it('sweeps a session owner that survives only as a terminal-surface tombstone', async () => {
+    const liveKey = `live-repo::${testState.dir}`
+    const orphanKey = 'orphan-repo::/home/tiger/gone'
+    writeDataFile({
+      repos: [makeRepo({ id: 'live-repo', path: testState.dir })],
+      worktreeMeta: { [liveKey]: { displayName: '', comment: '', lastActivityAt: 1 } },
+      workspaceSession: {
+        ...getDefaultWorkspaceSession(),
+        terminalSurfaceTombstonesByPaneKey: {
+          'orphan-pane': {
+            worktreeId: orphanKey,
+            parentTabId: 'orphan-tab',
+            leafId: 'leaf-1',
+            ptyId: 'pty-1',
+            incarnationId: 'inc-1',
+            retiredAt: 1
+          }
+        }
+      }
+    })
+
+    const store = await createStore()
+    expect(
+      store.getWorkspaceSession().terminalSurfaceTombstonesByPaneKey?.['orphan-pane']
+    ).toBeUndefined()
   })
 
   it('does not wipe worktree state when there are no live repos (guards an anomalous empty-owner load)', async () => {
