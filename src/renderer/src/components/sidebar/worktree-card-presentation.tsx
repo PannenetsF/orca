@@ -76,8 +76,6 @@ export function buildWorktreeCardPresentation(card: WorktreeCardController) {
     showRepoIdentityInTitle && !!repo && !hideRepoBadge && !isFolder && !showPinnedRepoIcon
   const showRepoBadgeInMetaRow =
     !showRepoIdentityInTitle && !!repo && !hideRepoBadge && !showPinnedRepoIcon
-  // Why: the board mixes projects in one lane; the icon-only chip alone can't tell
-  // two projects apart (every primary reads `main`/`master`), so name it inline.
   const showProjectNameLabel = Boolean(showProjectName) && showInlineRepoBadge
   const showHostContextBadge = !compactCards && !!hostContextLabel
   const showDetachedHeadInMetaRow = !compactCards && !isFolder && detachedHeadDisplay !== null

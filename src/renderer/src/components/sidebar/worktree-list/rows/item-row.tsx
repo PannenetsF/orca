@@ -213,9 +213,7 @@ export function renderWorktreeItemRow(
         onCardDragStart={ctx.onCardDragStart}
         onCardDragEnd={ctx.onCardDragEnd}
         hideRepoBadge={ctx.groupBy === 'repo'}
-        // Why: status/pr-status/ungrouped views interleave projects in one group; the
-        // icon-only chip alone can't tell them apart (every primary reads main/master),
-        // so name the project inline. Repo-grouped views use the repo group header instead.
+        // Why: non-repo groupings interleave projects, so name it inline; repo groups use the group header.
         showProjectName={ctx.groupBy !== 'repo'}
         // Why: pinned worktrees mix repos in one section, so only it needs the leading repo identity chip.
         hostContextLabel={itemRow.hostContextLabel}

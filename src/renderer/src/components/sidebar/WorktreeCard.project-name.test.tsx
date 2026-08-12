@@ -75,13 +75,11 @@ function makeRepo(): Repo {
 }
 
 function makeFolderRepo(): Repo {
-  // Why: a folder workspace has a repo but suppresses the repo icon chip, so the
-  // inline project label must not render even though showProjectName is set.
+  // Folder workspaces suppress the repo icon chip, so the inline label must not render.
   return { ...makeRepo(), kind: 'folder' }
 }
 
-// Why: reproduces a project's primary worktree with no session — the title
-// falls back to the branch, so `main`/`master` alone can't tell projects apart.
+// Primary worktree with no session: title falls back to the branch, so main/master alone can't disambiguate.
 function makePrimaryWorktree(overrides: Partial<Worktree> = {}): Worktree {
   return {
     id: 'repo-1::/repo',
@@ -147,8 +145,7 @@ describe('WorktreeCard project name (board)', () => {
   })
 
   it('renders the project name as text in the compact card style (board card)', async () => {
-    // Why: compact cards also render the repo as an icon-only chip, so the sidebar
-    // wiring must surface the inline label here too, not just the new card style.
+    // Compact cards also render the repo as an icon-only chip, so the inline label must surface here too.
     experimentalNewWorktreeCardStyle = false
     compactWorktreeCards = true
     const { default: WorktreeCard } = await import('./WorktreeCard')
@@ -194,8 +191,7 @@ describe('WorktreeCard project name (board)', () => {
       )
     })
 
-    // Why: folder workspaces suppress the repo icon chip, so the inline project
-    // label is gated off with it even though showProjectName is set.
+    // Folder workspaces suppress the repo icon chip, so the inline label is gated off with it.
     expect(projectNameEl()).toBeNull()
   })
 })

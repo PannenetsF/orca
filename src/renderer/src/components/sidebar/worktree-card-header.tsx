@@ -167,9 +167,7 @@ export function WorktreeCardHeader({
           </RepoIdentityChip>
         )}
 
-        {/* Why: board lanes mix projects; name the project inline so cards whose
-            title is just the branch (every primary reads main/master) stay distinct.
-            The adjacent chip already tooltips the full name, so a bounded truncate is safe. */}
+        {/* Bounded truncate is safe: the adjacent chip already tooltips the full name. */}
         {showProjectNameLabel && repo && (
           <span
             className="max-w-[8rem] shrink-0 truncate text-[11px] font-medium leading-5 text-muted-foreground"
