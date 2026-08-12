@@ -116,4 +116,49 @@ describe('custom git server store', () => {
     const result = await testCustomGitServerConnection({ ...draft, token: '' })
     expect(result.ok).toBe(false)
   })
+
+  it('caches a successful verify within the TTL and refreshes after it expires', async () => {
+    vi.useFakeTimers()
+    try {
+      verifyMock.mockResolvedValue({ account: 'fanyunqian' })
+      saveCustomGitServer(draft)
+
+      await getCustomGitServerStatuses()
+      await getCustomGitServerStatuses()
+      expect(verifyMock).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(30_000 + 1)
+      await getCustomGitServerStatuses()
+      expect(verifyMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not cache a failed verify so a transient outage self-heals next tick', async () => {
+    verifyMock.mockResolvedValueOnce(null).mockResolvedValue({ account: 'fanyunqian' })
+    saveCustomGitServer(draft)
+
+    const [first] = await getCustomGitServerStatuses()
+    expect(first).toMatchObject({ authenticated: false })
+    const [second] = await getCustomGitServerStatuses()
+    expect(second).toMatchObject({ authenticated: true, account: 'fanyunqian' })
+    expect(verifyMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('invalidates the cached verify when the server is re-saved', async () => {
+    vi.useFakeTimers()
+    try {
+      verifyMock.mockResolvedValue({ account: 'fanyunqian' })
+      saveCustomGitServer(draft)
+      await getCustomGitServerStatuses()
+      expect(verifyMock).toHaveBeenCalledTimes(1)
+
+      saveCustomGitServer(draft)
+      await getCustomGitServerStatuses()
+      expect(verifyMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
