@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
 import { isSleepingSweepExemptionNarrowingList } from './visible-worktrees'
 import SidebarRepositoryFilterSection from './SidebarRepositoryFilterSection'
+import SidebarStatusFilterSection from './SidebarStatusFilterSection'
 import SidebarWorkspaceFilterSection from './SidebarWorkspaceFilterSection'
 import { getSidebarHostVisibilityLabel, shouldShowHostScopeControls } from './sidebar-host-options'
 import { useSidebarHostScopeOptions } from './use-sidebar-host-scope-options'
@@ -35,6 +36,8 @@ export function useWorkspaceOptionsFilterBadge(): {
   const hideWorkspacesFromOtherDevices = useAppStore((s) => s.hideWorkspacesFromOtherDevices)
   const alwaysShowDefaultBranchWorkspace = useAppStore((s) => s.alwaysShowDefaultBranchWorkspace)
   const filterRepoIds = useAppStore((s) => s.filterRepoIds)
+  const filterWorkspaceStatuses = useAppStore((s) => s.filterWorkspaceStatuses)
+  const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const repos = useAppStore((s) => s.repos)
   const visibleWorkspaceHostIds = useAppStore((s) => s.visibleWorkspaceHostIds)
 
@@ -48,12 +51,20 @@ export function useWorkspaceOptionsFilterBadge(): {
     return count
   }, [repos, filterRepoIds])
 
+  // Why derive from the live catalog: a since-deleted custom status must not
+  // inflate the count or keep the filter badge lit with no matching lane.
+  const selectedStatusCount = useMemo(
+    () => workspaceStatuses.filter((status) => filterWorkspaceStatuses.includes(status.id)).length,
+    [workspaceStatuses, filterWorkspaceStatuses]
+  )
+
   const hasSleepingFilter = showSleepingWorkspaces !== DEFAULT_SHOW_SLEEPING_WORKSPACES
   const hasSleepingExemptionFilter = isSleepingSweepExemptionNarrowingList(
     showSleepingWorkspaces,
     alwaysShowDefaultBranchWorkspace
   )
   const hasRepoFilter = selectedCount > 0
+  const hasStatusFilter = selectedStatusCount > 0
   const hasHostVisibilityFilter = visibleWorkspaceHostIds !== null
   const hasAnyFilter =
     hasSleepingFilter ||
@@ -64,6 +75,7 @@ export function useWorkspaceOptionsFilterBadge(): {
     hideWorkspacesFromOtherDevices ||
     hasSleepingExemptionFilter ||
     hasRepoFilter ||
+    hasStatusFilter ||
     hasHostVisibilityFilter
   const activeFilterCount =
     (hasSleepingFilter ? 1 : 0) +
@@ -74,7 +86,8 @@ export function useWorkspaceOptionsFilterBadge(): {
     (hideWorkspacesFromOtherDevices ? 1 : 0) +
     (hasSleepingExemptionFilter ? 1 : 0) +
     (hasHostVisibilityFilter ? 1 : 0) +
-    selectedCount
+    selectedCount +
+    selectedStatusCount
 
   return {
     hasAnyFilter,
@@ -89,6 +102,7 @@ export function WorkspaceOptionsMenuItems({
   preserveWorkspaceBoardOpen?: boolean
 }): JSX.Element {
   const repos = useAppStore((s) => s.repos)
+  const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const setWorkspaceHostScope = useAppStore((s) => s.setWorkspaceHostScope)
   const visibleWorkspaceHostIds = useAppStore((s) => s.visibleWorkspaceHostIds)
   const setVisibleWorkspaceHostIds = useAppStore((s) => s.setVisibleWorkspaceHostIds)
@@ -114,9 +128,10 @@ export function WorkspaceOptionsMenuItems({
           'Workspace options'
         )}
       </DropdownMenuLabel>
-      {/* Why: host + project filters share one section and the same single-row
-          shell as Sort by (label left, value right) so the menu stays flat. */}
-      {(showHostScopeControls || repos.length > 1) && (
+      {/* Why: host + project + status filters share one section and the same
+          single-row shell as Sort by (label left, value right) so the menu
+          stays flat. Status is always available, so this section always shows. */}
+      {(showHostScopeControls || repos.length > 1 || workspaceStatuses.length > 0) && (
         <>
           <DropdownMenuLabel>
             {translate('auto.components.sidebar.SidebarWorkspaceOptionsMenu.showSection', 'Show')}
@@ -131,6 +146,7 @@ export function WorkspaceOptionsMenuItems({
               setVisibleWorkspaceHostIds={setVisibleWorkspaceHostIds}
             />
           )}
+          <SidebarStatusFilterSection preserveWorkspaceBoardOpen={preserveWorkspaceBoardOpen} />
           <SidebarRepositoryFilterSection preserveWorkspaceBoardOpen={preserveWorkspaceBoardOpen} />
           <DropdownMenuSeparator />
         </>
