@@ -268,6 +268,32 @@ export function getWorkspaceStatus(
     : getDefaultWorkspaceStatusId(statuses)
 }
 
+/**
+ * Sanitize a persisted/inbound list of status-filter ids against the live
+ * status catalog. Drops ids the catalog no longer defines (e.g. a custom
+ * status the user deleted) and de-dupes, so a stale filter can never hide
+ * every workspace with no matching lane. Order follows the catalog so the
+ * filter chips read in the same order as the board columns.
+ */
+export function sanitizeFilterWorkspaceStatuses(
+  value: unknown,
+  statuses: readonly WorkspaceStatusDefinition[]
+): WorkspaceStatus[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const requested = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      requested.add(entry)
+    }
+  }
+  if (requested.size === 0) {
+    return []
+  }
+  return statuses.filter((status) => requested.has(status.id)).map((status) => status.id)
+}
+
 export function getWorkspaceStatusGroupKey(status: WorkspaceStatus): string {
   return `${WORKSPACE_STATUS_GROUP_PREFIX}${encodeURIComponent(status)}`
 }

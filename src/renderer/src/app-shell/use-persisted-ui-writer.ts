@@ -32,6 +32,7 @@ export function usePersistedUIWriter(): void {
       alwaysShowDefaultBranchWorkspace: s.alwaysShowDefaultBranchWorkspace,
       showDotfilesByWorktree: s.showDotfilesByWorktree,
       filterRepoIds: s.filterRepoIds,
+      filterWorkspaceStatuses: s.filterWorkspaceStatuses,
       // Why: rides the same debounced save so dashboard auto-acks (which fire on focus/
       // visibility) and the in-memory ack cleanup paths in agent-status.ts (close/dismiss)
       // both flow to disk through map identity changes. Without persisting, agent rows that

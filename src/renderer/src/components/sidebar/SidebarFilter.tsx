@@ -28,6 +28,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import { FilterToggleRow } from './FilterToggleRow'
+import SidebarStatusFilterSection from './SidebarStatusFilterSection'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { searchRepos } from '@/lib/repo-search'
 import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
@@ -68,6 +69,9 @@ const SidebarFilter = React.memo(function SidebarFilter({
   )
   const filterRepoIds = useAppStore((s) => s.filterRepoIds)
   const setFilterRepoIds = useAppStore((s) => s.setFilterRepoIds)
+  const filterWorkspaceStatuses = useAppStore((s) => s.filterWorkspaceStatuses)
+  const setFilterWorkspaceStatuses = useAppStore((s) => s.setFilterWorkspaceStatuses)
+  const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const repos = useAppStore((s) => s.repos)
   const addRepo = useAppStore((s) => s.addRepo)
 
@@ -111,6 +115,13 @@ const SidebarFilter = React.memo(function SidebarFilter({
   }, [repos, filterRepoIds])
   const selectedCount = selectedRepoIdSet.size
   const hasRepoFilter = selectedCount > 0
+  // Why derive from the live catalog: a since-deleted custom status must not
+  // inflate the count or keep the filter badge lit with no matching lane.
+  const selectedStatusCount = useMemo(
+    () => workspaceStatuses.filter((status) => filterWorkspaceStatuses.includes(status.id)).length,
+    [workspaceStatuses, filterWorkspaceStatuses]
+  )
+  const hasStatusFilter = selectedStatusCount > 0
   const hasSleepingFilter = showSleepingWorkspaces !== DEFAULT_SHOW_SLEEPING_WORKSPACES
   // Why counted: turning the exemption off is the only way that row narrows the
   // list — but only while its parent row is on, which is also when it renders.
@@ -125,7 +136,8 @@ const SidebarFilter = React.memo(function SidebarFilter({
     hideCliCreatedWorkspaces ||
     hideDetachedHeadWorkspaces ||
     hasSleepingExemptionFilter ||
-    hasRepoFilter
+    hasRepoFilter ||
+    hasStatusFilter
   const activeFilterCount =
     (hasSleepingFilter ? 1 : 0) +
     (hideDefaultBranchWorkspace ? 1 : 0) +
@@ -133,6 +145,7 @@ const SidebarFilter = React.memo(function SidebarFilter({
     (hideCliCreatedWorkspaces ? 1 : 0) +
     (hideDetachedHeadWorkspaces ? 1 : 0) +
     (hasSleepingExemptionFilter ? 1 : 0) +
+    selectedStatusCount +
     selectedCount
 
   const filteredRepos = useMemo(() => searchRepos(repos, query), [repos, query])
@@ -150,6 +163,7 @@ const SidebarFilter = React.memo(function SidebarFilter({
     setHideDetachedHeadWorkspaces(false)
     setAlwaysShowDefaultBranchWorkspace(true)
     setFilterRepoIds([])
+    setFilterWorkspaceStatuses([])
   }, [
     setShowSleepingWorkspaces,
     setHideDefaultBranchWorkspace,
@@ -157,7 +171,8 @@ const SidebarFilter = React.memo(function SidebarFilter({
     setHideCliCreatedWorkspaces,
     setHideDetachedHeadWorkspaces,
     setAlwaysShowDefaultBranchWorkspace,
-    setFilterRepoIds
+    setFilterRepoIds,
+    setFilterWorkspaceStatuses
   ])
 
   // Why: derive ids from the live repos list at click time so a repo added
@@ -277,6 +292,13 @@ const SidebarFilter = React.memo(function SidebarFilter({
           checked={hideDetachedHeadWorkspaces}
           onChange={setHideDetachedHeadWorkspaces}
         />
+
+        {workspaceStatuses.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <SidebarStatusFilterSection preserveWorkspaceBoardOpen={preserveWorkspaceBoardOpen} />
+          </>
+        )}
 
         {canFilterRepos && (
           <>
