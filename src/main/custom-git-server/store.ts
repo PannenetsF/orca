@@ -36,6 +36,20 @@ export {
 export function _resetCustomGitServerStore(): void {
   _resetCustomGitServerStoreCache()
   _resetCustomGitServerTokenCache()
+  verificationCache.clear()
+}
+
+// Why: preflight polls getCustomGitServerStatuses, so cache each server's live
+// verify() briefly to avoid hammering the configured host on every tick. The
+// in-flight promise is cached so concurrent ticks share one request.
+const STATUS_VERIFY_TTL_MS = 30_000
+const verificationCache = new Map<
+  string,
+  { expiresAt: number; result: Promise<CustomGitServerTestResult> }
+>()
+
+function invalidateServerVerification(id: string): void {
+  verificationCache.delete(id)
 }
 
 /**
@@ -57,6 +71,8 @@ export function saveCustomGitServer(
 
   const servers = listCustomGitServers().filter((existing) => existing.id !== id)
   writeCustomGitServerConfig([...servers, server])
+  // Why: config/token just changed, so a cached auth result for this id is stale.
+  invalidateServerVerification(id)
   return server
 }
 
@@ -64,6 +80,7 @@ export function saveCustomGitServer(
 export function removeCustomGitServer(id: string): void {
   deleteCustomGitServerToken(id)
   writeCustomGitServerConfig(listCustomGitServers().filter((server) => server.id !== id))
+  invalidateServerVerification(id)
 }
 
 async function verifyServer(
@@ -117,8 +134,30 @@ async function statusForServer(server: CustomGitServer): Promise<CustomGitServer
   if (!token) {
     return { ...base, authenticated: false, account: null }
   }
-  const result = await verifyServer(server, token)
+  const result = await verifyServerCached(server, token)
   return { ...base, authenticated: result.ok, account: result.ok ? result.account : null }
+}
+
+// Reuse a recent verify() for `server` within the TTL; refresh once it expires.
+function verifyServerCached(
+  server: CustomGitServer,
+  token: string
+): Promise<CustomGitServerTestResult> {
+  const cached = verificationCache.get(server.id)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result
+  }
+  const result = verifyServer(server, token)
+  verificationCache.set(server.id, { expiresAt: Date.now() + STATUS_VERIFY_TTL_MS, result })
+  // Don't cache a rejected/failed probe so a transient outage self-heals next tick.
+  void result
+    .then((outcome) => {
+      if (!outcome.ok) {
+        invalidateServerVerification(server.id)
+      }
+    })
+    .catch(() => invalidateServerVerification(server.id))
+  return result
 }
 
 /** Status of every configured server (token presence + live auth check). */
