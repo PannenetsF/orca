@@ -146,6 +146,27 @@ describe('WorktreeCard project name (board)', () => {
     expect(projectNameEl()?.textContent).toBe('orca')
   })
 
+  it('renders the project name as text in the compact card style (board card)', async () => {
+    // Why: compact cards also render the repo as an icon-only chip, so the sidebar
+    // wiring must surface the inline label here too, not just the new card style.
+    experimentalNewWorktreeCardStyle = false
+    compactWorktreeCards = true
+    const { default: WorktreeCard } = await import('./WorktreeCard')
+
+    act(() => {
+      root?.render(
+        <WorktreeCard
+          worktree={makePrimaryWorktree()}
+          repo={makeRepo()}
+          isActive={false}
+          showProjectName
+        />
+      )
+    })
+
+    expect(projectNameEl()?.textContent).toBe('orca')
+  })
+
   it('omits the project name text without showProjectName (sidebar card)', async () => {
     const { default: WorktreeCard } = await import('./WorktreeCard')
 
