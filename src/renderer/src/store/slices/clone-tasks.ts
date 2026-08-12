@@ -145,11 +145,7 @@ export const createCloneTaskSlice: StateCreator<AppState, [], [], CloneTaskSlice
       // Why: a failed clone stays dialog-owned until dismissed; nothing to hand off.
       return
     }
-    // Why: runCloneTask can win the race and mark the task 'success' before the
-    // dialog closes. runCloneTask skipped notifyCloneComplete because the task
-    // wasn't backgrounded yet, and the dialog cleared activeTaskId so its
-    // navigation effect won't fire — so the handoff must ping the user here, or
-    // the finished task leaks with no row, no toast, and no navigation.
+    // Why: a clone that finished before backgrounding was skipped by notify/navigation, so hand off the toast here.
     const alreadyFinished = entry.status === 'success'
     set((s) => {
       const current = s.cloneTasksById[taskId]
