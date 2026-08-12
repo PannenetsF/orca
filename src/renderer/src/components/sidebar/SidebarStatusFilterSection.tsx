@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { getWorkspaceStatusVisualMeta } from './workspace-status'
+import { getLiveSelectedWorkspaceStatusIds } from '../../../../shared/workspace-statuses'
 import type { WorkspaceStatus, WorkspaceStatusDefinition } from '../../../../shared/worktree/types'
 import { translate } from '@/i18n/i18n'
 
@@ -75,15 +76,10 @@ const SidebarStatusFilterSection = React.memo(function SidebarStatusFilterSectio
 
   // Why: derive from the live catalog so a since-deleted custom status can't
   // inflate the count or falsely signal an applied filter.
-  const selectedStatusIdSet = useMemo(() => {
-    const set = new Set<string>()
-    for (const status of workspaceStatuses) {
-      if (filterWorkspaceStatuses.includes(status.id)) {
-        set.add(status.id)
-      }
-    }
-    return set
-  }, [workspaceStatuses, filterWorkspaceStatuses])
+  const selectedStatusIdSet = useMemo(
+    () => getLiveSelectedWorkspaceStatusIds(workspaceStatuses, filterWorkspaceStatuses),
+    [workspaceStatuses, filterWorkspaceStatuses]
+  )
   const selectedCount = selectedStatusIdSet.size
   const hasStatusFilter = selectedCount > 0
   const selectedLabel = useMemo(

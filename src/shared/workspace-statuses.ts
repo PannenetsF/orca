@@ -269,6 +269,24 @@ export function getWorkspaceStatus(
 }
 
 /**
+ * Selected status ids intersected with the live catalog, so a since-deleted
+ * custom status can't inflate a count or falsely signal an applied filter.
+ */
+export function getLiveSelectedWorkspaceStatusIds(
+  statuses: readonly WorkspaceStatusDefinition[],
+  filterWorkspaceStatuses: readonly WorkspaceStatus[]
+): Set<WorkspaceStatus> {
+  const selected = new Set(filterWorkspaceStatuses)
+  const live = new Set<WorkspaceStatus>()
+  for (const status of statuses) {
+    if (selected.has(status.id)) {
+      live.add(status.id)
+    }
+  }
+  return live
+}
+
+/**
  * Sanitize a persisted/inbound list of status-filter ids against the live
  * status catalog. Drops ids the catalog no longer defines (e.g. a custom
  * status the user deleted) and de-dupes, so a stale filter can never hide
