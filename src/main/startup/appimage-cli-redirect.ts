@@ -187,7 +187,7 @@ export function findFirstCommandCandidate(args: string[]): string | null {
   return null
 }
 
-function buildElectronRunAsNodeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildElectronRunAsNodeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const childEnv = { ...env }
   childEnv.ORCA_NODE_OPTIONS = env.NODE_OPTIONS ?? ''
   childEnv.ORCA_NODE_REPL_EXTERNAL_MODULE = env.NODE_REPL_EXTERNAL_MODULE ?? ''

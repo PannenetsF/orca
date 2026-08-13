@@ -118,7 +118,6 @@ import {
 import {
   configureElectronNetworkCompatibility,
   configureDevUserDataPath,
-  configureLinuxCliSandbox,
   configureOrcaUserDataPathEnv,
   enableMainProcessGpuFeatures,
   installDevParentDisconnectQuit,
@@ -157,6 +156,7 @@ import {
   suppressDevEducationForStore
 } from './startup/dev-education-suppression'
 import { maybeRedirectAppImageCliLaunch } from './startup/appimage-cli-redirect'
+import { maybeRedirectExtractedLinuxCliLaunch } from './startup/extracted-linux-cli-redirect'
 import { maybeRedirectPackagedCliEntryLaunch } from './startup/packaged-cli-entry-redirect'
 import { startFirstWindowStartupServices } from './startup/first-window-startup-services'
 import { recoverLegacyWorkerTerminalsForRendererStartup } from './startup/legacy-worker-renderer-recovery'
@@ -468,6 +468,20 @@ const appImageCliRedirect = maybeRedirectAppImageCliLaunch({
 if (appImageCliRedirect.redirected) {
   app.exit(appImageCliRedirect.status)
 }
+// Why: on Linux the extracted per-version runtime binary can be launched directly
+// (versions/<ver>/orca-ide <cli command>) with no ELECTRON_RUN_AS_NODE and no
+// $APPIMAGE, e.g. remote orchestration. The main process has no in-process CLI
+// dispatcher, so it would boot the GUI/serve — and Chromium's SUID sandbox aborts
+// first on a non-root-owned tree. Reroute to node mode (which never boots the
+// zygote) before the lock gate, mirroring the AppImage redirect above.
+const extractedLinuxCliRedirect = maybeRedirectExtractedLinuxCliLaunch({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  execPath: process.execPath
+})
+if (extractedLinuxCliRedirect.redirected) {
+  app.exit(extractedLinuxCliRedirect.status)
+}
 // Why: extracted AppRun / binary launches can land CLI-form `serve` args on the
 // Electron process without the CLI rewrite that injects `--serve` (#12677).
 // Guarded so a normal GUI launch keeps its original argv array identity.
@@ -475,13 +489,6 @@ if (argvRequestsServeMode(process.argv)) {
   process.argv = normalizeServeModeArgv(process.argv)
 }
 const isServeMode = process.argv.includes('--serve')
-
-// Why: a headless Linux CLI subcommand launched against the extracted runtime binary
-// (no ELECTRON_RUN_AS_NODE, no $APPIMAGE) still boots Chromium's SUID sandbox, which
-// aborts when the node-owned runtime tree leaves chrome-sandbox not root:root 4755.
-// Append the opt-out here, before app 'ready'/zygote init, so `skills get` and other
-// non-GUI commands run; the GUI/serve browser sandbox is preserved by the gate.
-configureLinuxCliSandbox({ isServeMode })
 
 function updateGpuAccelerationAboutPanel(): void {
   app.setAboutPanelOptions(

@@ -4,7 +4,6 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getVersionManagerBinPaths } from '../codex-cli/command'
 import { getMainE2EConfig } from '../e2e-config'
-import { APPIMAGE_CLI_COMMAND_NAMES, findFirstCommandCandidate } from './appimage-cli-redirect'
 
 const DEV_PARENT_SHUTDOWN_GRACE_MS = 3000
 const HTTP1_COMPATIBILITY_ENV_VAR = 'ORCA_DISABLE_HTTP2'
@@ -252,53 +251,6 @@ export function installDevParentSignalQuit(isDev: boolean): void {
 
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
-}
-
-type LinuxCliSandboxOptions = {
-  argv?: string[]
-  platform?: NodeJS.Platform
-  isServeMode?: boolean
-  env?: NodeJS.ProcessEnv
-}
-
-// Why: a headless text CLI subcommand (e.g. `skills get`) launched against the
-// extracted per-version runtime binary boots Electron with a non-GUI argv but no
-// ELECTRON_RUN_AS_NODE, so Chromium still initializes its SUID sandbox — which
-// aborts when the node-owned runtime tree leaves chrome-sandbox not root:root 4755.
-// Only the AppImage/serve paths were covered before, never a bare extracted-tree
-// CLI invocation. Restricted to Linux + an allow-listed CLI command so the desktop
-// renderer and `serve` browser surfaces keep the setuid sandbox.
-export function isHeadlessLinuxCliInvocation(options: LinuxCliSandboxOptions = {}): boolean {
-  const platform = options.platform ?? process.platform
-  if (platform !== 'linux') {
-    return false
-  }
-  // Why: `serve` opens real browser surfaces, so it must keep the sandbox; the
-  // AppImage redirect and serve child already own their own --no-sandbox choice.
-  if (options.isServeMode ?? process.argv.includes('--serve')) {
-    return false
-  }
-  const env = options.env ?? process.env
-  // Why: node-mode CLI (ELECTRON_RUN_AS_NODE) never boots the zygote, and the
-  // AppImage redirect handles $APPIMAGE launches before this gate is consulted.
-  if (env.ELECTRON_RUN_AS_NODE === '1' || env.APPIMAGE || env.APPDIR) {
-    return false
-  }
-  const command = findFirstCommandCandidate((options.argv ?? process.argv).slice(1))
-  return command !== null && APPIMAGE_CLI_COMMAND_NAMES.includes(command)
-}
-
-// Why: append the setuid-sandbox opt-out before app 'ready'/zygote init (mirrors
-// the early switches below) so a headless Linux CLI command runs on a runtime tree
-// whose chrome-sandbox isn't root:root 4755 instead of aborting at startup.
-export function configureLinuxCliSandbox(options: LinuxCliSandboxOptions = {}): boolean {
-  if (!isHeadlessLinuxCliInvocation(options)) {
-    return false
-  }
-  // Why: disable only the setuid helper — the text command opens no BrowserWindow,
-  // so this never weakens a renderer or serve browser sandbox.
-  app.commandLine.appendSwitch('disable-setuid-sandbox')
-  return true
 }
 
 export function enableMainProcessGpuFeatures(): void {
