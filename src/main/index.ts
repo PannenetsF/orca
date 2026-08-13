@@ -118,6 +118,7 @@ import {
 import {
   configureElectronNetworkCompatibility,
   configureDevUserDataPath,
+  configureLinuxCliSandbox,
   configureOrcaUserDataPathEnv,
   enableMainProcessGpuFeatures,
   installDevParentDisconnectQuit,
@@ -474,6 +475,13 @@ if (argvRequestsServeMode(process.argv)) {
   process.argv = normalizeServeModeArgv(process.argv)
 }
 const isServeMode = process.argv.includes('--serve')
+
+// Why: a headless Linux CLI subcommand launched against the extracted runtime binary
+// (no ELECTRON_RUN_AS_NODE, no $APPIMAGE) still boots Chromium's SUID sandbox, which
+// aborts when the node-owned runtime tree leaves chrome-sandbox not root:root 4755.
+// Append the opt-out here, before app 'ready'/zygote init, so `skills get` and other
+// non-GUI commands run; the GUI/serve browser sandbox is preserved by the gate.
+configureLinuxCliSandbox({ isServeMode })
 
 function updateGpuAccelerationAboutPanel(): void {
   app.setAboutPanelOptions(

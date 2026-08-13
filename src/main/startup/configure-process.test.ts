@@ -679,3 +679,97 @@ describe('enableMainProcessGpuFeatures', () => {
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith('enable-features', 'ExistingFeature')
   })
 })
+
+describe('configureLinuxCliSandbox', () => {
+  const linuxCliOptions = {
+    argv: ['orca-ide', 'skills', 'get', 'orchestration', '--full'],
+    platform: 'linux' as NodeJS.Platform,
+    isServeMode: false,
+    env: {} as NodeJS.ProcessEnv
+  }
+
+  it('disables the setuid sandbox for a headless Linux CLI command', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    vi.mocked(app.commandLine.appendSwitch).mockClear()
+    const applied = configureLinuxCliSandbox(linuxCliOptions)
+
+    expect(applied).toBe(true)
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith('disable-setuid-sandbox')
+    expect(app.commandLine.appendSwitch).not.toHaveBeenCalledWith('no-sandbox')
+  })
+
+  it('allows global CLI flags before the command name', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    vi.mocked(app.commandLine.appendSwitch).mockClear()
+    const applied = configureLinuxCliSandbox({
+      ...linuxCliOptions,
+      argv: ['orca-ide', '--environment', 'prod', 'orchestration', 'send']
+    })
+
+    expect(applied).toBe(true)
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith('disable-setuid-sandbox')
+  })
+
+  it('does not touch the sandbox on macOS or Windows', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    for (const platform of ['darwin', 'win32'] as const) {
+      vi.mocked(app.commandLine.appendSwitch).mockClear()
+      const applied = configureLinuxCliSandbox({ ...linuxCliOptions, platform })
+
+      expect(applied).toBe(false)
+      expect(app.commandLine.appendSwitch).not.toHaveBeenCalledWith('disable-setuid-sandbox')
+    }
+  })
+
+  it('preserves the sandbox for the serve browser surface', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    vi.mocked(app.commandLine.appendSwitch).mockClear()
+    const applied = configureLinuxCliSandbox({
+      ...linuxCliOptions,
+      argv: ['orca-ide', 'serve'],
+      isServeMode: true
+    })
+
+    expect(applied).toBe(false)
+    expect(app.commandLine.appendSwitch).not.toHaveBeenCalledWith('disable-setuid-sandbox')
+  })
+
+  it('preserves the sandbox for a GUI (no CLI command) launch', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    vi.mocked(app.commandLine.appendSwitch).mockClear()
+    const applied = configureLinuxCliSandbox({
+      ...linuxCliOptions,
+      argv: ['orca-ide', '--no-sandbox', 'file:///tmp/example.txt']
+    })
+
+    expect(applied).toBe(false)
+    expect(app.commandLine.appendSwitch).not.toHaveBeenCalledWith('disable-setuid-sandbox')
+  })
+
+  it('leaves node-mode CLI and AppImage launches to their existing paths', async () => {
+    const { app } = await import('electron')
+    const { configureLinuxCliSandbox } = await import('./configure-process')
+
+    for (const env of [
+      { ELECTRON_RUN_AS_NODE: '1' },
+      { APPIMAGE: '/opt/orca.AppImage' },
+      { APPDIR: '/tmp/.mount_orca' }
+    ] as NodeJS.ProcessEnv[]) {
+      vi.mocked(app.commandLine.appendSwitch).mockClear()
+      const applied = configureLinuxCliSandbox({ ...linuxCliOptions, env })
+
+      expect(applied).toBe(false)
+      expect(app.commandLine.appendSwitch).not.toHaveBeenCalledWith('disable-setuid-sandbox')
+    }
+  })
+})
