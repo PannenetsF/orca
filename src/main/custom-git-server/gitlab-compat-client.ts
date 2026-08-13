@@ -4,7 +4,7 @@ import type {
   HostedReviewState
 } from '../../shared/hosted-review'
 import type { CustomGitServer } from '../../shared/custom-git-server'
-import type { MRInfo } from '../../shared/types'
+import type { MRInfo } from '../../shared/gitlab-types'
 import {
   normalizeHostedReviewBaseRef,
   normalizeHostedReviewHeadRef

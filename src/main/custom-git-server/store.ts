@@ -65,12 +65,32 @@ export function saveCustomGitServer(
   const id = draft.id ?? computeCustomGitServerId(normalized.host, normalized.apiBaseUrl)
   const server: CustomGitServer = { id, ...normalized }
 
-  if (draft.token && draft.token.trim()) {
-    saveCustomGitServerToken(id, draft.token.trim())
+  const writingToken = Boolean(draft.token && draft.token.trim())
+  // Why: config + token live in two stores. Write the token first, but if the
+  // config write then fails, roll the token back so a failed save leaves both
+  // stores as they were rather than mutating the token for an unchanged config.
+  let tokenRollback: (() => void) | null = null
+  if (writingToken) {
+    const hadToken = hasStoredCustomGitServerToken(id)
+    const priorToken = hadToken ? safeReadToken(id) : null
+    saveCustomGitServerToken(id, draft.token!.trim())
+    tokenRollback = () => {
+      if (priorToken !== null) {
+        saveCustomGitServerToken(id, priorToken)
+      } else if (!hadToken) {
+        deleteCustomGitServerToken(id)
+      }
+    }
   }
 
   const servers = listCustomGitServers().filter((existing) => existing.id !== id)
-  writeCustomGitServerConfig([...servers, server])
+  try {
+    writeCustomGitServerConfig([...servers, server])
+  } catch (error) {
+    // Undo the token mutation so the failure is atomic from the caller's view.
+    tokenRollback?.()
+    throw error
+  }
   // Why: config/token just changed, so a cached auth result for this id is stale.
   invalidateServerVerification(id)
   return server
@@ -78,9 +98,22 @@ export function saveCustomGitServer(
 
 /** Delete a server and its stored token. */
 export function removeCustomGitServer(id: string): void {
-  deleteCustomGitServerToken(id)
+  // Why: config is the source of truth, so drop it first. If this throws the
+  // token is left intact (config still references the server). Deleting the
+  // token only after the config write commits means a delete failure there
+  // leaves a harmless orphaned token, never a configured server with no token.
   writeCustomGitServerConfig(listCustomGitServers().filter((server) => server.id !== id))
+  deleteCustomGitServerToken(id)
   invalidateServerVerification(id)
+}
+
+/** Read a token without throwing on an undecryptable value (used for rollback). */
+function safeReadToken(id: string): string | null {
+  try {
+    return getCustomGitServerToken(id)
+  } catch {
+    return null
+  }
 }
 
 async function verifyServer(

@@ -14,7 +14,7 @@ export type PreflightMocks = {
   getBitbucketAuthStatusMock: Mock
   getAzureDevOpsAuthStatusMock: Mock
   getGiteaAuthStatusMock: Mock
-  getCustomGitServerStatusesMock: Mock
+  getCustomGitServerStatusesMock?: Mock
   resolveCliCommandsMock: Mock
   isCommandOnLocalPathMock: Mock
   mergePersistedWindowsPathAsyncMock: Mock
@@ -96,7 +96,7 @@ export function resetPreflightMocks(mocks: PreflightMocks, handlers: HandlerMap)
   getBitbucketAuthStatusMock.mockResolvedValue(defaultBitbucketStatus)
   getAzureDevOpsAuthStatusMock.mockResolvedValue(defaultAzureDevOpsStatus)
   getGiteaAuthStatusMock.mockResolvedValue(defaultGiteaStatus)
-  getCustomGitServerStatusesMock.mockResolvedValue([])
+  getCustomGitServerStatusesMock?.mockResolvedValue([])
   _resetPreflightCache()
   Object.defineProperty(process, 'platform', {
     configurable: true,
