@@ -32,6 +32,14 @@ const HELP_FLAGS = new Set(['--help', '-h', 'help'])
 // Why: mirror the AppImage redirect — these are Chromium desktop flags, not CLI
 // args, so drop them before deciding whether argv is a CLI command.
 const DESKTOP_FLAGS = new Set(['--no-sandbox'])
+// Why: the SUID-sandbox abort is specific to the extracted per-version runtime
+// tree (~/.config/orca-runtime/versions/<ver>/orca-ide), which a non-root user
+// unpacks so chrome-sandbox is never root:root 4755. A native deb/rpm install
+// (/opt/Orca/orca-ide) ships chrome-sandbox root-owned and must not be rerouted.
+function isExtractedRuntimeExecPath(execPath: string): boolean {
+  const normalized = execPath.split('\\').join('/')
+  return normalized.includes('/orca-runtime/versions/')
+}
 
 /**
  * Why: on Linux the packaged app can be launched directly as the extracted
@@ -58,6 +66,11 @@ export function maybeRedirectExtractedLinuxCliLaunch(
   const execPath = options.execPath ?? process.execPath
   const exists = options.exists ?? existsSync
   const spawn = options.spawn ?? spawnSync
+  // Why: only the extracted per-version tree hits the SUID-sandbox abort; a
+  // native install keeps its own launch path and a root-owned chrome-sandbox.
+  if (platform === 'linux' && !isExtractedRuntimeExecPath(execPath)) {
+    return { redirected: false }
+  }
   const cliArgs = getExtractedLinuxCliArgs(argv, env, {
     platform,
     isPackaged,

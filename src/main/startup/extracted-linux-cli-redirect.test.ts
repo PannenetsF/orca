@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -106,38 +106,61 @@ describe('extracted-tree Linux CLI redirect', () => {
 
   it('re-runs the CLI entrypoint in Electron node mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'orca-extracted-cli-redirect-'))
-    const cliEntryPath = join(root, 'app.asar.unpacked', 'out', 'cli', 'index.js')
-    await mkdir(join(root, 'app.asar.unpacked', 'out', 'cli'), { recursive: true })
-    await writeFile(cliEntryPath, '', 'utf8')
-    const spawn = vi.fn((..._args: unknown[]) => ({ status: 0 }))
+    try {
+      const cliEntryPath = join(root, 'app.asar.unpacked', 'out', 'cli', 'index.js')
+      await mkdir(join(root, 'app.asar.unpacked', 'out', 'cli'), { recursive: true })
+      await writeFile(cliEntryPath, '', 'utf8')
+      const spawn = vi.fn((..._args: unknown[]) => ({ status: 0 }))
 
+      const result = maybeRedirectExtractedLinuxCliLaunch({
+        argv: ['orca-ide', 'skills', 'get', 'orchestration', '--full'],
+        env: { NODE_OPTIONS: '--inspect', NODE_REPL_EXTERNAL_MODULE: '/tmp/repl.js' },
+        platform: 'linux',
+        isPackaged: true,
+        resourcesPath: root,
+        execPath: '/home/orca/.config/orca-runtime/versions/1.4.158/orca-ide',
+        commandNames,
+        spawn: spawn as never
+      })
+
+      expect(result).toEqual({ redirected: true, status: 0 })
+      expect(spawn).toHaveBeenCalledWith(
+        '/home/orca/.config/orca-runtime/versions/1.4.158/orca-ide',
+        [cliEntryPath, 'skills', 'get', 'orchestration', '--full'],
+        {
+          env: expect.objectContaining({
+            ELECTRON_RUN_AS_NODE: '1',
+            ORCA_NODE_OPTIONS: '--inspect',
+            ORCA_NODE_REPL_EXTERNAL_MODULE: '/tmp/repl.js'
+          }),
+          stdio: 'inherit'
+        }
+      )
+      const spawnOptions = spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv } | undefined
+      expect(spawnOptions?.env).not.toHaveProperty('NODE_OPTIONS')
+      expect(spawnOptions?.env).not.toHaveProperty('NODE_REPL_EXTERNAL_MODULE')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not redirect a native-install binary (only the extracted per-version tree)', () => {
+    const spawn = vi.fn((..._args: unknown[]) => ({ status: 0 }))
     const result = maybeRedirectExtractedLinuxCliLaunch({
-      argv: ['orca-ide', 'skills', 'get', 'orchestration', '--full'],
-      env: { NODE_OPTIONS: '--inspect', NODE_REPL_EXTERNAL_MODULE: '/tmp/repl.js' },
+      argv: ['orca-ide', 'status'],
+      env: {},
       platform: 'linux',
       isPackaged: true,
-      resourcesPath: root,
-      execPath: '/opt/orca/app/orca-ide',
+      resourcesPath: '/opt/Orca/resources',
+      // A deb/rpm install ships chrome-sandbox root:root 4755 — no SUID abort.
+      execPath: '/opt/Orca/orca-ide',
       commandNames,
+      exists: (() => true) as never,
       spawn: spawn as never
     })
 
-    expect(result).toEqual({ redirected: true, status: 0 })
-    expect(spawn).toHaveBeenCalledWith(
-      '/opt/orca/app/orca-ide',
-      [cliEntryPath, 'skills', 'get', 'orchestration', '--full'],
-      {
-        env: expect.objectContaining({
-          ELECTRON_RUN_AS_NODE: '1',
-          ORCA_NODE_OPTIONS: '--inspect',
-          ORCA_NODE_REPL_EXTERNAL_MODULE: '/tmp/repl.js'
-        }),
-        stdio: 'inherit'
-      }
-    )
-    const spawnOptions = spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv } | undefined
-    expect(spawnOptions?.env).not.toHaveProperty('NODE_OPTIONS')
-    expect(spawnOptions?.env).not.toHaveProperty('NODE_REPL_EXTERNAL_MODULE')
+    expect(result).toEqual({ redirected: false })
+    expect(spawn).not.toHaveBeenCalled()
   })
 
   it('reports a missing CLI entrypoint without spawning', () => {
@@ -148,7 +171,7 @@ describe('extracted-tree Linux CLI redirect', () => {
       platform: 'linux',
       isPackaged: true,
       resourcesPath: '/nonexistent',
-      execPath: '/opt/orca/app/orca-ide',
+      execPath: '/home/orca/.config/orca-runtime/versions/1.4.158/orca-ide',
       commandNames,
       exists: (() => false) as never,
       spawn: spawn as never
@@ -166,7 +189,7 @@ describe('extracted-tree Linux CLI redirect', () => {
       platform: 'linux',
       isPackaged: true,
       resourcesPath: '/whatever',
-      execPath: '/opt/orca/app/orca-ide',
+      execPath: '/home/orca/.config/orca-runtime/versions/1.4.158/orca-ide',
       commandNames,
       exists: (() => true) as never,
       spawn: spawn as never
