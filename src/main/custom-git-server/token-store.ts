@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { safeStorage } from 'electron'
+import { getSecretStore } from '../../shared/secret-store'
 import {
   CredentialDecryptionError,
   credentialFileHasContent,
@@ -37,8 +37,8 @@ function ensureDir(dir: string): void {
 }
 
 function writeEncryptedToken(path: string, token: string): void {
-  if (safeStorage.isEncryptionAvailable()) {
-    writeFileSync(path, safeStorage.encryptString(token), { mode: 0o600 })
+  if (getSecretStore().isEncryptionAvailable()) {
+    writeFileSync(path, getSecretStore().encryptString(token), { mode: 0o600 })
     return
   }
   console.warn('[custom-git-server] safeStorage encryption unavailable — storing token in plaintext')
