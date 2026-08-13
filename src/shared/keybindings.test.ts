@@ -775,7 +775,7 @@ describe('keybindings', () => {
     ).toBe(true)
 
     const definition = getKeybindingDefinition('workspace.openBoard')
-    expect(definition?.title).toBe('Open Workspace Board')
+    expect(definition?.title).toBe('Toggle Workspace Board')
     expect(definition?.searchKeywords).toEqual(
       expect.arrayContaining(['workspace', 'board', 'kanban'])
     )

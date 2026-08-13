@@ -85,7 +85,7 @@ import {
 } from '@/lib/floating-workspace-terminal-actions'
 import { createFloatingWorkspaceTourInteractionSnapshot } from '@/lib/floating-workspace-tour-interaction-snapshot'
 import { requestScrollToCurrentWorkspaceRevealAndRename } from '@/lib/scroll-to-current-workspace-status'
-import { OPEN_WORKSPACE_BOARD_EVENT } from './components/sidebar/useWorkspaceBoardPanel'
+import { TOGGLE_WORKSPACE_BOARD_EVENT } from './components/sidebar/useWorkspaceBoardPanel'
 import { WorkspacePortScanner } from './components/ports/WorkspacePortScanner'
 import { CrashReportDialog } from './components/crash-report/CrashReportDialog'
 import NewWorkspaceComposerModal from './components/NewWorkspaceComposerModal'
@@ -1710,7 +1710,7 @@ function App(): React.JSX.Element {
             }
             return claim('workspace.openBoard', () => {
               useAppStore.getState().setSidebarOpen(true)
-              window.dispatchEvent(new CustomEvent(OPEN_WORKSPACE_BOARD_EVENT))
+              window.dispatchEvent(new CustomEvent(TOGGLE_WORKSPACE_BOARD_EVENT))
             })
           }
         ],
