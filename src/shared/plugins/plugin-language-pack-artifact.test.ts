@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isPluginLanguagePackRegistration,
   parsePluginLanguagePackArtifact,
   PLUGIN_LANGUAGE_CATALOG_MAX_DEPTH,
+  PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES,
+  validatePluginLanguagePackCatalog,
+  validatePluginLanguagePackCatalogShape,
   pluginLanguageResourceId
 } from './plugin-language-pack-artifact'
 
@@ -35,6 +39,9 @@ describe('plugin language-pack artifacts', () => {
 
   it.each([
     'PluginConsentDialog',
+    // The provenance badge and install-error copy carry the trust decision.
+    'PluginConsentProvenance',
+    'pluginError',
     'PluginKeybindingConsentPreview',
     'PluginMarketplaceListingRow',
     'PluginMarketplacePreviewDialog',
@@ -55,6 +62,93 @@ describe('plugin language-pack artifacts', () => {
   })
 
   it.each([
+    ['PluginsSettingsSection', 'title', 'Плагины'],
+    ['PluginMarketplaceBrowser', 'refresh', 'Обновить'],
+    ['PluginDevelopmentSection', 'title', 'Разработка']
+  ])('lets a language pack translate %s.%s, which asserts nothing', (component, key, value) => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: { components: { settings: { [component]: { [key]: value } } } }
+        })
+      ).ok
+    ).toBe(true)
+  })
+
+  // Why: the chrome exemption must not leak into the copy that carries a claim
+  // about what plugins may do — that copy is the whole reason the prefix is broad.
+  it.each([
+    ['description', 'Plugins are sandboxed and cannot read your files.'],
+    ['systemDescription', 'Every plugin here has been reviewed by Orca.'],
+    ['featureOff', 'Installed plugins keep running while the system is off.']
+  ])('still refuses PluginsSettingsSection.%s', (key, value) => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: { components: { settings: { PluginsSettingsSection: { [key]: value } } } }
+        })
+      )
+    ).toMatchObject({ ok: false, error: expect.stringContaining('protected security copy') })
+  })
+
+  it('still refuses the development-plugin permission promise', () => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: {
+            components: {
+              settings: {
+                PluginDevelopmentSection: { help: 'Dev plugins skip permission review.' }
+              }
+            }
+          }
+        })
+      )
+    ).toMatchObject({ ok: false, error: expect.stringContaining('protected security copy') })
+  })
+
+  it('still refuses install failure copy that reports a trust event', () => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: {
+            components: {
+              settings: { PluginMarketplaceBrowser: { installFailed: 'Installed successfully.' } }
+            }
+          }
+        })
+      )
+    ).toMatchObject({ ok: false, error: expect.stringContaining('protected security copy') })
+  })
+
+  it('forges no trust badge: the community→Official swap is refused', () => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: {
+            components: {
+              settings: { PluginConsentProvenance: { community: 'Official' } }
+            }
+          }
+        })
+      )
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('auto.components.settings.PluginConsentProvenance')
+    })
+  })
+
+  it('still lets language packs translate non-plugin settings copy', () => {
+    expect(
+      parsePluginLanguagePackArtifact(
+        JSON.stringify({
+          auto: { components: { settings: { AppearanceSection: { title: 'Apariencia' } } } }
+        })
+      ).ok
+    ).toBe(true)
+  })
+
+  it.each([
     ['array leaf', { settings: { choices: ['one'] } }],
     ['numeric leaf', { settings: { count: 1 } }],
     ['dotted key', { 'settings.title': 'Title' }],
@@ -72,5 +166,49 @@ describe('plugin language-pack artifacts', () => {
       ok: false,
       error: expect.stringContaining('depth')
     })
+  })
+
+  it('accepts the entry limit and rejects one additional entry', () => {
+    const catalog = Object.fromEntries(
+      Array.from({ length: PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES }, (_, index) => [
+        `key${index}`,
+        'value'
+      ])
+    )
+
+    expect(validatePluginLanguagePackCatalog(catalog)).toMatchObject({
+      ok: true,
+      entries: PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES
+    })
+    catalog.overflow = 'value'
+    expect(validatePluginLanguagePackCatalog(catalog)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(`${PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES} entries`)
+    })
+  })
+
+  it('shape-validates 16 maximum-entry registrations without returning catalog copies', () => {
+    const catalog = Object.fromEntries(
+      Array.from({ length: PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES }, (_, index) => [
+        `key${index}`,
+        'value'
+      ])
+    )
+    const packs = Array.from({ length: 16 }, (_, index) => {
+      const id = `plugin:maximum-${index}` as const
+      return {
+        id,
+        resourceLanguage: pluginLanguageResourceId(id),
+        pluginKey: `maximum-${index}`,
+        locale: 'en',
+        catalog
+      }
+    })
+
+    expect(validatePluginLanguagePackCatalogShape(catalog)).toEqual({
+      ok: true,
+      entries: PLUGIN_LANGUAGE_CATALOG_MAX_ENTRIES
+    })
+    expect(packs.filter(isPluginLanguagePackRegistration)).toHaveLength(16)
   })
 })

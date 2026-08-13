@@ -8,38 +8,74 @@ import { getRepoHostIdentity } from './repo-host-identity'
 // virtualizer to rebuild + re-measure a tick after the drop — the visible jump.
 // Reusing equal objects (and the whole array when nothing moved) makes the echo
 // a no-op render.
-function areReposEqual(a: Repo, b: Repo): boolean {
+// Why: `Repo` carries nested records (hookSettings, upstream, gitRemoteIdentity, repoIcon, path
+// arrays). IPC structured-clone rebuilds those every fetch, and main's hydrateRepo always
+// reconstructs hookSettings — so a reference compare reports every repo as changed and no repo
+// ever reconciles. Compare nested plain values structurally; they are small sanitized records.
+export function areValuesEqual(a: unknown, b: unknown): boolean {
   if (a === b) {
     return true
   }
-  const keys = Object.keys(a) as (keyof Repo)[]
-  if (keys.length !== Object.keys(b).length) {
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
     return false
   }
-  for (const key of keys) {
-    if (!Object.prototype.hasOwnProperty.call(b, key)) {
-      return false
-    }
-    if (a[key] !== b[key]) {
-      return false
-    }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, index) => areValuesEqual(item, b[index]))
+    )
   }
-  return true
+  // Why: only plain records are safe to walk — anything exotic falls back to reference equality.
+  const aPrototype = Object.getPrototypeOf(a)
+  const bPrototype = Object.getPrototypeOf(b)
+  if (
+    (aPrototype !== Object.prototype && aPrototype !== null) ||
+    (bPrototype !== Object.prototype && bPrototype !== null)
+  ) {
+    return false
+  }
+  const aRecord = a as Record<string, unknown>
+  const bRecord = b as Record<string, unknown>
+  const keys = Object.keys(aRecord)
+  if (keys.length !== Object.keys(bRecord).length) {
+    return false
+  }
+  return keys.every(
+    (key) => Object.hasOwn(bRecord, key) && areValuesEqual(aRecord[key], bRecord[key])
+  )
 }
 
-export function reconcileFetchedRepos(previous: readonly Repo[], next: Repo[]): Repo[] {
-  const previousById = new Map(previous.map((repo) => [getRepoHostIdentity(repo), repo]))
+/**
+ * Reuses equal rows from `previous` — and the whole array when nothing moved — so a refetch that
+ * changed nothing leaves identity-keyed memos and store subscribers untouched. `getIdentity` must
+ * be the key the producing merge already dedups by, so it is unique within `next`.
+ */
+export function reconcileCatalogRows<T>(
+  previous: readonly T[],
+  next: readonly T[],
+  getIdentity: (row: T) => string
+): readonly T[] {
+  const previousByIdentity = new Map(previous.map((row) => [getIdentity(row), row]))
   let identical = next.length === previous.length
-  const reconciled = next.map((repo, index) => {
-    const existing = previousById.get(getRepoHostIdentity(repo))
-    if (existing && areReposEqual(existing, repo)) {
+  const reconciled = next.map((row, index) => {
+    const existing = previousByIdentity.get(getIdentity(row))
+    if (existing !== undefined && areValuesEqual(existing, row)) {
       if (existing !== previous[index]) {
         identical = false
       }
       return existing
     }
     identical = false
-    return repo
+    return row
   })
-  return identical ? (previous as Repo[]) : reconciled
+  return identical ? previous : reconciled
+}
+
+export function reconcileFetchedRepos(
+  previous: readonly Repo[],
+  next: readonly Repo[]
+): readonly Repo[] {
+  return reconcileCatalogRows(previous, next, getRepoHostIdentity)
 }

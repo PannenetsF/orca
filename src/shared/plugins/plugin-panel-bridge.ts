@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { getPluginHostMethodSpec, isPluginPanelAction } from './plugin-host-api'
+import { isPluginPanelAction } from './plugin-host-api'
 
 /**
  * postMessage protocol between a sandboxed plugin panel iframe and the host
@@ -21,6 +21,13 @@ export const PLUGIN_PANEL_FRAME_NAME_PREFIX = 'orca-plugin-panel:'
 /** Per-plugin bridge budgets, enforced host-side. */
 export const PANEL_MESSAGE_MAX_BYTES = 64 * 1024
 export const PANEL_MESSAGE_RATE_LIMIT = { maxMessages: 30, perMs: 10_000 }
+
+/** Size cap for the reserved liveness lane. Deliberately size-only: any
+ *  per-window count on this lane can be spent by the panel's own pongs and
+ *  would drop the next genuine reply, which is the starvation this reserved
+ *  lane exists to prevent. Aggregate cost stays bounded because pongs are also
+ *  charged to the data budget and cost O(1) plus a walk capped here. */
+export const PANEL_CONTROL_MESSAGE_MAX_BYTES = 1024
 
 /** Watchdog cadence: a panel that misses a pong deadline is demoted to an
  *  errored badge. Busy-loop detection is valid only while the runtime frame-
@@ -127,24 +134,19 @@ export function looksLikePanelActionRequest(data: unknown): boolean {
   )
 }
 
-export function looksLikePanelPong(data: unknown): boolean {
-  return panelPongSchema.safeParse(data).success
-}
-
-/** Validates action params against the host API spec (shared with workers). */
-export function parsePanelActionParams(
-  action: string,
-  params: unknown
-): { ok: true; params: unknown } | { ok: false; error: string } {
-  const spec = getPluginHostMethodSpec(action)
-  if (!spec) {
-    return { ok: false, error: `unknown action: ${action}` }
+/** Reads a valid pong's pingId, or null. Hand-rolled rather than
+ *  `panelPongSchema.safeParse` because a rejected parse allocates an issue
+ *  list, which is ~90x the accepted-path cost — free CPU for a panel spamming
+ *  near-miss pongs. The schema stays the contract; this mirrors it exactly. */
+export function readPanelPongId(data: unknown): number | null {
+  if (typeof data !== 'object' || data === null) {
+    return null
   }
-  const parsed = spec.params.safeParse(params)
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0]
-    const path = issue?.path.join('.') || '(root)'
-    return { ok: false, error: `${path}: ${issue?.message ?? 'invalid action params'}` }
+  const frame = data as { type?: unknown; pingId?: unknown }
+  if (frame.type !== PANEL_PONG_TYPE || typeof frame.pingId !== 'number') {
+    return null
   }
-  return { ok: true, params: parsed.data }
+  // isSafeInteger, not isInteger: zod's .int() rejects 2**53 and above, and a
+  // wider reader would admit ids the watchdog can never have issued.
+  return Number.isSafeInteger(frame.pingId) && frame.pingId >= 0 ? frame.pingId : null
 }

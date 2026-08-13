@@ -18,6 +18,7 @@ const {
   mockFilesystemProvider,
   mockMultiplexer,
   gitExecFileAsyncMock,
+  gitSpawnAfterWindowsEnvironmentReadyMock,
   gitSpawnMock,
   listWorktreeGraphMock,
   invalidateAuthorizedRootsCacheMock,
@@ -69,6 +70,7 @@ const {
     notify: vi.fn()
   },
   gitSpawnMock: vi.fn(),
+  gitSpawnAfterWindowsEnvironmentReadyMock: vi.fn(),
   gitExecFileAsyncMock: vi.fn(),
   listWorktreeGraphMock: vi.fn(),
   invalidateAuthorizedRootsCacheMock: vi.fn(),
@@ -104,7 +106,8 @@ vi.mock('../git/runner', async () => ({
   gitExecFileAsync: gitExecFileAsyncMock,
   gitExecFileAsyncBuffer: vi.fn(),
   gitStreamStdout: vi.fn(),
-  gitSpawn: gitSpawnMock
+  gitSpawn: gitSpawnMock,
+  gitSpawnAfterWindowsEnvironmentReady: gitSpawnAfterWindowsEnvironmentReadyMock
 }))
 
 vi.mock('../git/worktree', () => ({
@@ -149,9 +152,16 @@ vi.mock('./ssh', () => ({
 
 import { registerRepoHandlers } from './repos'
 import { clearSubmodulePathsCacheForTests, listSubmodulePaths } from '../git/status'
+import { toSshExecutionHostId } from '../../shared/execution-host'
+import {
+  getSshProviderAuthority,
+  resetSshProviderAuthorities,
+  rotateSshProviderAuthority
+} from '../ssh/ssh-provider-authority'
 
 beforeEach(() => {
   clearGitCapabilityStateForTests()
+  resetSshProviderAuthorities()
 })
 
 describe('projectGroups IPC validation', () => {
@@ -208,6 +218,128 @@ describe('projectGroups IPC validation', () => {
     ).toThrow('invalid_project_group_create_args')
 
     expect(mockStore.createProjectGroup).not.toHaveBeenCalled()
+  })
+
+  it('returns an immutable repo catalog for exactly one execution host', async () => {
+    const localRepo = {
+      id: 'duplicate',
+      path: '/local/repo',
+      displayName: 'local',
+      badgeColor: '#000',
+      addedAt: 0
+    }
+    const sshRepo = {
+      id: 'duplicate',
+      path: '/remote/repo',
+      displayName: 'remote',
+      badgeColor: '#000',
+      addedAt: 0,
+      connectionId: 'conn-1'
+    }
+    const runtimeRepo = {
+      id: 'duplicate',
+      path: '/runtime/repo',
+      displayName: 'runtime',
+      badgeColor: '#000',
+      addedAt: 0,
+      executionHostId: 'runtime:environment-a'
+    }
+    mockStore.getRepos.mockReturnValue([localRepo, sshRepo, runtimeRepo])
+
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: toSshExecutionHostId('conn-1'),
+        expectedAuthority: getSshProviderAuthority('conn-1')
+      })
+    ).resolves.toMatchObject({
+      authoritative: true,
+      authority: {
+        kind: 'direct-ssh',
+        executionHostId: 'ssh:conn-1',
+        targetId: 'conn-1'
+      },
+      repos: [sshRepo]
+    })
+
+    const local = await handlers.get('repos:listForExecutionHost')!(null, {
+      executionHostId: 'local'
+    })
+    expect(local).toMatchObject({ authoritative: true, repos: [localRepo] })
+    expect((local as { repos: object[] }).repos[0]).not.toBe(localRepo)
+  })
+
+  it('rejects repo catalogs whose execution host contradicts their SSH connection', async () => {
+    const baseRepo = {
+      id: 'repo-1',
+      path: '/repo',
+      displayName: 'repo',
+      badgeColor: '#000',
+      addedAt: 0
+    }
+    mockStore.getRepos.mockReturnValue([
+      {
+        ...baseRepo,
+        connectionId: 'conn-1',
+        executionHostId: 'local'
+      }
+    ])
+
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: 'local'
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: toSshExecutionHostId('conn-1'),
+        expectedAuthority: getSshProviderAuthority('conn-1')
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+
+    mockStore.getRepos.mockReturnValue([
+      {
+        ...baseRepo,
+        connectionId: 'conn-1',
+        executionHostId: toSshExecutionHostId('conn-2')
+      }
+    ])
+
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: toSshExecutionHostId('conn-1'),
+        expectedAuthority: getSshProviderAuthority('conn-1')
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+  })
+
+  it('rejects runtime, partial, mismatched, and stale catalog authority', async () => {
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: 'runtime:environment-a'
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: toSshExecutionHostId('conn-1')
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+    await expect(
+      handlers.get('repos:listForExecutionHost')!(null, {
+        executionHostId: toSshExecutionHostId('conn-1'),
+        expectedAuthority: {
+          ...getSshProviderAuthority('other-target'),
+          targetId: 'other-target'
+        }
+      })
+    ).resolves.toMatchObject({ authoritative: false, reason: 'rejected' })
+
+    const expectedAuthority = getSshProviderAuthority('conn-1')
+    const pending = handlers.get('repos:listForExecutionHost')!(null, {
+      executionHostId: toSshExecutionHostId('conn-1'),
+      expectedAuthority
+    })
+    rotateSshProviderAuthority('conn-1')
+    await expect(pending).resolves.toMatchObject({ authoritative: false, reason: 'stale' })
   })
 
   it('rejects malformed local project group update arguments before persistence', () => {
@@ -986,6 +1118,7 @@ describe('repos:addRemote', () => {
     })
     mockStore.getRepos.mockReset().mockReturnValue([])
     mockStore.addRepo.mockReset()
+    mockStore.removeProject.mockReset()
     mockStore.getSshTarget.mockReset()
     mockStore.updateRepo.mockReset()
     mockGitProvider.isGitRepoAsync.mockReset()
@@ -1019,7 +1152,7 @@ describe('repos:addRemote', () => {
     gitSpawnMock.mockImplementation(() => {
       const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter }
       proc.stderr = new EventEmitter()
-      queueMicrotask(() => proc.emit('close', 0, null))
+      setImmediate(() => proc.emit('close', 0, null))
       return proc
     })
     mockWindow.webContents.send.mockReset()
@@ -1719,11 +1852,14 @@ describe('repos:add + repos:clone', () => {
     mockStore.updateProjectHostSetup.mockReset()
     mockWindow.webContents.send.mockReset()
     gitSpawnMock.mockReset()
+    gitSpawnAfterWindowsEnvironmentReadyMock
+      .mockReset()
+      .mockImplementation(async (...args) => gitSpawnMock(...args))
     invalidateAuthorizedRootsCacheMock.mockReset()
     prepareLocalWorktreeRootForRepoMock.mockReset().mockResolvedValue(undefined)
     gitSpawnMock.mockImplementation(() => {
       const proc = createMockCloneProcess()
-      queueMicrotask(() => proc.emit('close', 0, null))
+      setImmediate(() => proc.emit('close', 0, null))
       return proc
     })
 
@@ -1937,6 +2073,76 @@ describe('repos:add + repos:clone', () => {
     })
   })
 
+  it('sets up a folder when the selected project exists only on another host', async () => {
+    const added: Record<string, unknown>[] = []
+    mockStore.getRepos.mockImplementation(() => added)
+    mockStore.addRepo.mockImplementation((repo: Record<string, unknown>) => added.push(repo))
+    mockStore.updateRepo.mockImplementation((id, updates) => {
+      const repo = added.find((entry) => entry.id === id)
+      if (!repo) {
+        return null
+      }
+      Object.assign(repo, updates)
+      return { ...repo }
+    })
+    mockStore.getProjects.mockImplementation(() => {
+      const repo = added.find((entry) => 'upstream' in entry)
+      return repo
+        ? [
+            {
+              id: 'github:github.acme.test/acme/orca',
+              displayName: 'Orca',
+              providerIdentity: {
+                provider: 'github',
+                owner: 'acme',
+                repo: 'orca',
+                host: 'github.acme.test'
+              }
+            }
+          ]
+        : []
+    })
+
+    const result = await handlers.get('projectHostSetups:setupExistingFolder')!(null, {
+      projectId: 'github:github.acme.test/acme/orca',
+      projectProviderIdentity: {
+        provider: 'github',
+        owner: 'acme',
+        repo: 'orca',
+        host: 'github.acme.test'
+      },
+      hostId: 'local',
+      path: '/tmp/orca-local',
+      kind: 'git'
+    })
+
+    expect(added[0]?.upstream).toEqual({
+      owner: 'acme',
+      repo: 'orca',
+      host: 'github.acme.test'
+    })
+    expect(result).toHaveProperty('project.id', 'github:github.acme.test/acme/orca')
+  })
+
+  it('rolls back a new repo when the supplied identity does not match the project', async () => {
+    const added: Record<string, unknown>[] = []
+    mockStore.getRepos.mockImplementation(() => added)
+    mockStore.addRepo.mockImplementation((repo: Record<string, unknown>) => added.push(repo))
+
+    await expect(
+      handlers.get('projectHostSetups:setupExistingFolder')!(null, {
+        projectId: 'github:acme/orca',
+        projectProviderIdentity: { provider: 'github', owner: 'other', repo: 'orca' },
+        hostId: 'local',
+        path: '/tmp/mismatched-project',
+        kind: 'git'
+      })
+    ).rejects.toThrow('Imported folder does not match the selected project identity.')
+
+    expect(mockStore.removeProject).toHaveBeenCalledWith(added[0]?.id)
+    expect(invalidateAuthorizedRootsCacheMock).toHaveBeenCalled()
+  })
+
   it('prepares and invalidates roots when repos:update changes worktree base path', () => {
     const updated = {
       id: 'repo-update-root',
@@ -1959,6 +2165,28 @@ describe('repos:add + repos:clone', () => {
     })
     expect(prepareLocalWorktreeRootForRepoMock).toHaveBeenCalledWith(mockStore, updated)
     expect(invalidateAuthorizedRootsCacheMock).toHaveBeenCalled()
+  })
+
+  it('persists agent worktree visibility through local repos:update', () => {
+    const updated = {
+      id: 'repo-agent-visibility',
+      path: '/tmp/repo-agent-visibility',
+      displayName: 'repo-agent-visibility',
+      kind: 'git',
+      badgeColor: '#22c55e',
+      agentWorktreeVisibility: 'show'
+    }
+    mockStore.updateRepo.mockReturnValue(updated)
+
+    const result = handlers.get('repos:update')!(null, {
+      repoId: updated.id,
+      updates: { agentWorktreeVisibility: 'show' }
+    })
+
+    expect(result).toBe(updated)
+    expect(mockStore.updateRepo).toHaveBeenCalledWith(updated.id, {
+      agentWorktreeVisibility: 'show'
+    })
   })
 
   it('prepares and invalidates roots when project host setup update changes worktree base path', () => {
@@ -2043,7 +2271,7 @@ describe('repos:add + repos:clone', () => {
     )
     gitSpawnMock.mockImplementationOnce(() => {
       const proc = createMockCloneProcess()
-      queueMicrotask(() => {
+      setImmediate(() => {
         cloned = true
         proc.emit('close', 0, null)
       })
@@ -2188,6 +2416,84 @@ describe('repos:add + repos:clone', () => {
 
   it('treats cloneAbort with no active clone as a no-op', async () => {
     await expect(handlers.get('repos:cloneAbort')!(null, undefined)).resolves.toBeUndefined()
+  })
+
+  it('cancels a local clone before Git starts when environment readiness is pending', async () => {
+    const destination = await createTempRoot()
+    const clonePath = join(destination, 'orca')
+    gitSpawnAfterWindowsEnvironmentReadyMock.mockImplementation(
+      (_args: string[], options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const abort = (): void => {
+            reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+          }
+          if (options.signal?.aborted) {
+            abort()
+          } else {
+            options.signal?.addEventListener('abort', abort, { once: true })
+          }
+        })
+    )
+
+    const clonePromise = Promise.resolve(
+      handlers.get('repos:clone')!(null, {
+        url: 'https://example.com/orca.git',
+        destination
+      })
+    )
+    const rejection = expect(clonePromise).rejects.toThrow('Clone failed')
+    await waitForAssertion(() =>
+      expect(gitSpawnAfterWindowsEnvironmentReadyMock).toHaveBeenCalledOnce()
+    )
+    expect(gitSpawnMock).not.toHaveBeenCalled()
+
+    await handlers.get('repos:cloneAbort')!(null, undefined)
+    await rejection
+    expect(gitSpawnMock).not.toHaveBeenCalled()
+    expect(existsSync(clonePath)).toBe(false)
+  })
+
+  it('cancels every concurrent local clone waiting for environment readiness', async () => {
+    const firstDestination = await createTempRoot()
+    const secondDestination = await createTempRoot()
+    gitSpawnAfterWindowsEnvironmentReadyMock.mockImplementation(
+      (_args: string[], options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const abort = (): void => {
+            reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+          }
+          if (options.signal?.aborted) {
+            abort()
+          } else {
+            options.signal?.addEventListener('abort', abort, { once: true })
+          }
+        })
+    )
+
+    const firstClone = Promise.resolve(
+      handlers.get('repos:clone')!(null, {
+        url: 'https://example.com/first.git',
+        destination: firstDestination
+      })
+    )
+    const secondClone = Promise.resolve(
+      handlers.get('repos:clone')!(null, {
+        url: 'https://example.com/second.git',
+        destination: secondDestination
+      })
+    )
+    const firstRejection = expect(firstClone).rejects.toThrow('Clone failed')
+    const secondRejection = expect(secondClone).rejects.toThrow('Clone failed')
+    await waitForAssertion(() =>
+      expect(gitSpawnAfterWindowsEnvironmentReadyMock).toHaveBeenCalledTimes(2)
+    )
+
+    await handlers.get('repos:cloneAbort')!(null, undefined)
+
+    await Promise.all([firstRejection, secondRejection])
+    expect(gitSpawnMock).not.toHaveBeenCalled()
+    expect(existsSync(join(firstDestination, 'first'))).toBe(false)
+    expect(existsSync(join(secondDestination, 'second'))).toBe(false)
   })
 
   it('does not remove an existing target directory when aborting a pending clone', async () => {

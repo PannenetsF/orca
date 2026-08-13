@@ -13,8 +13,8 @@ type ProjectAccumulator = {
 }
 
 export type ProjectHostSetupProjection = {
-  projects: Project[]
-  setups: ProjectHostSetup[]
+  projects: readonly Project[]
+  setups: readonly ProjectHostSetup[]
 }
 
 function getProjectProviderIdentity(
@@ -101,13 +101,17 @@ export function getProjectIdentityKey(
 ): string {
   const identity = getProjectProviderIdentity(repo)
   if (identity) {
-    return `github:${githubRepoIdentityKey(identity)}`
+    return getProjectIdForProviderIdentity(identity)
   }
   const gitRemoteIdentity = getProjectGitRemoteIdentity(repo)
   if (gitRemoteIdentity) {
     return `git:${gitRemoteIdentity.canonicalKey}`
   }
   return `repo:${repo.id}`
+}
+
+export function getProjectIdForProviderIdentity(identity: ProjectProviderIdentity): string {
+  return `github:${githubRepoIdentityKey(identity)}`
 }
 
 function getProjectId(
