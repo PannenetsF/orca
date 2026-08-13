@@ -301,7 +301,17 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     title: 'Toggle Workspace Board',
     group: 'Global',
     scope: 'global',
-    searchKeywords: ['shortcut', 'global', 'workspace', 'board', 'kanban', 'worktree', 'toggle', 'open', 'close'],
+    searchKeywords: [
+      'shortcut',
+      'global',
+      'workspace',
+      'board',
+      'kanban',
+      'worktree',
+      'toggle',
+      'open',
+      'close'
+    ],
     // Why: configurable but unbound by default, to not take a global chord from terminal/browser/editor users.
     defaultBindings: platformBindings([]),
     allowInTerminal: true
