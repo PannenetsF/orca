@@ -357,6 +357,12 @@ export const COMMIT_MESSAGE_AGENT_SPECS: Partial<Record<TuiAgent, CommitMessageA
       {
         // Why: Claude Code aliases track the account/provider's supported
         // model IDs; hardcoded version IDs can be rejected by Bedrock/Vertex.
+        id: 'fable',
+        label: 'Fable',
+        thinkingLevels: CLAUDE_THINKING_LEVELS,
+        defaultThinkingLevel: 'high'
+      },
+      {
         id: 'haiku',
         label: 'Haiku'
       },

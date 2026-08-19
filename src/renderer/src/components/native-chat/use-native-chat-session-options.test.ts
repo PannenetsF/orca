@@ -82,10 +82,14 @@ describe('useNativeChatSessionOptions model reporting', () => {
     await waitFor(() =>
       expect(modelDescriptor(result.current.snapshot).currentValue).toBe('opus[1m]')
     )
-    // The invented family row is gone: every choice is one the host listed.
+    // Seed rows the host omitted (e.g. fable) stay selectable; discovered rows
+    // overlay the matching seed ids and append any new ones.
     expect(modelDescriptor(result.current.snapshot).choices.map((choice) => choice.value)).toEqual([
-      'opus[1m]',
-      'haiku'
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+      'opus[1m]'
     ])
   })
 
@@ -130,7 +134,7 @@ describe('useNativeChatSessionOptions model reporting', () => {
     await waitFor(() =>
       expect(
         modelDescriptor(result.current.snapshot).choices.map((choice) => choice.value)
-      ).toEqual(['opus[1m]', 'haiku'])
+      ).toEqual(['fable', 'opus', 'sonnet', 'haiku', 'opus[1m]'])
     )
     expect(modelDescriptor(result.current.snapshot).currentValue).toBeUndefined()
   })
@@ -171,7 +175,7 @@ describe('useNativeChatSessionOptions model reporting', () => {
     await waitFor(() =>
       expect(
         modelDescriptor(result.current.snapshot).choices.map((choice) => choice.value)
-      ).toEqual(['opus[1m]', 'haiku'])
+      ).toEqual(['fable', 'opus', 'sonnet', 'haiku', 'opus[1m]'])
     )
     expect(modelDescriptor(result.current.snapshot).currentValue).toBeUndefined()
   })

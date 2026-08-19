@@ -98,7 +98,7 @@ describe('native chat session option enrichment', () => {
     )
   })
 
-  it('uses only discovered Claude rows and capabilities per host', async () => {
+  it('merges seed Claude rows with discovered capabilities per host', async () => {
     mocks.discoverRuntimeCommitMessageModels.mockResolvedValue({
       success: true,
       catalogOrigin: 'probe',
@@ -135,7 +135,10 @@ describe('native chat session option enrichment', () => {
     await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce())
 
     const models = readNativeChatEnrichedModels('claude', 'ssh:host')!
-    expect(models.map(({ id }) => id)).toEqual(['opus[1m]', 'sonnet'])
+    // Why: seed rows the CLI omits (e.g. fable, which needs a one-time consent
+    // before list_models advertises it) must stay selectable, so the merge keeps
+    // every seed id and overlays discovered rows on top.
+    expect(models.map(({ id }) => id)).toEqual(['fable', 'opus', 'sonnet', 'haiku', 'opus[1m]'])
     const sonnetEffort = models.find(({ id }) => id === 'sonnet')?.options[0]
     expect(sonnetEffort?.kind).toMatchObject({
       type: 'select',
