@@ -1207,6 +1207,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       const now = Date.now()
       // Why: only reallocate if an ack advances; compare prev<now not !== — Date.now() ticks every ms and !== would rewrite the map every call.
       let next: Record<string, number> | null = null
+      let nextUnreadAgentCompletionPanes = s.unreadAgentCompletionPanes
       for (const key of paneKeys) {
         const prev = s.acknowledgedAgentsByPaneKey[key] ?? 0
         const liveEntry = s.agentStatusByPaneKey?.[key]
@@ -1235,8 +1236,24 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           }
           next[key] = now
         }
+        // Why: agent completion sets unreadAgentCompletionPanes alongside the worktree unread
+        // dot; acknowledging the agent must clear that pane-level marker too, or the terminal
+        // pane keeps its completion-unread indicator after the user reads it from Activity.
+        if (nextUnreadAgentCompletionPanes[key]) {
+          if (nextUnreadAgentCompletionPanes === s.unreadAgentCompletionPanes) {
+            nextUnreadAgentCompletionPanes = { ...s.unreadAgentCompletionPanes }
+          }
+          delete nextUnreadAgentCompletionPanes[key]
+        }
       }
-      return next ? { acknowledgedAgentsByPaneKey: next } : s
+      const updates: Record<string, unknown> = {}
+      if (next) {
+        updates.acknowledgedAgentsByPaneKey = next
+      }
+      if (nextUnreadAgentCompletionPanes !== s.unreadAgentCompletionPanes) {
+        updates.unreadAgentCompletionPanes = nextUnreadAgentCompletionPanes
+      }
+      return Object.keys(updates).length > 0 ? updates : s
     })
     const notificationIds = [...notificationIdsToDismiss]
     if (notificationIds.length > 0 && typeof window !== 'undefined') {

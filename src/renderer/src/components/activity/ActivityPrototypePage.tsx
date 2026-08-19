@@ -1442,6 +1442,9 @@ export default function ActivityPrototypePage(): React.JSX.Element {
       acknowledgedAgentsByPaneKey: s.acknowledgedAgentsByPaneKey,
       acknowledgeAgents: s.acknowledgeAgents,
       unacknowledgeAgents: s.unacknowledgeAgents,
+      clearWorktreeUnread: s.clearWorktreeUnread,
+      unreadAgentCompletionPanes: s.unreadAgentCompletionPanes,
+      unreadTerminalTabs: s.unreadTerminalTabs,
       generatedTitlesEnabled: s.settings?.tabAutoGenerateTitle === true
     }))
   )
@@ -1665,8 +1668,32 @@ export default function ActivityPrototypePage(): React.JSX.Element {
     return () => window.removeEventListener('keydown', focusActivityFilter, { capture: true })
   }, [activePortalTargetEl, inactivePortalTargetEl])
 
+  const clearWorktreeUnreadIfNoOtherAttention = useCallback(
+    (worktreeId: string): void => {
+      const tabIds = new Set((storeData.tabsByWorktree[worktreeId] ?? []).map((t) => t.id))
+      if (tabIds.size === 0) {
+        storeData.clearWorktreeUnread(worktreeId)
+        return
+      }
+      const hasOtherUnreadAgentCompletion = Object.keys(storeData.unreadAgentCompletionPanes).some(
+        (paneKey) => {
+          const parsed = parsePaneKey(paneKey)
+          return parsed && tabIds.has(parsed.tabId)
+        }
+      )
+      const hasUnreadTerminalTabs = Object.keys(storeData.unreadTerminalTabs).some((tabId) =>
+        tabIds.has(tabId)
+      )
+      if (!hasOtherUnreadAgentCompletion && !hasUnreadTerminalTabs) {
+        storeData.clearWorktreeUnread(worktreeId)
+      }
+    },
+    [storeData]
+  )
+
   const markThreadRead = (thread: AgentPaneThread): void => {
     storeData.acknowledgeAgents([thread.paneKey])
+    clearWorktreeUnreadIfNoOtherAttention(thread.worktree.id)
   }
 
   const markThreadUnread = (thread: AgentPaneThread): void => {
@@ -1720,6 +1747,7 @@ export default function ActivityPrototypePage(): React.JSX.Element {
       visibleThread?.paneKey === effectiveSelectedPaneKey && visiblePortalReady
     if (selectedThreadHasDetailOnlyView || selectedThreadIsVisibleTerminal) {
       storeData.acknowledgeAgents([selectedThread.paneKey])
+      clearWorktreeUnreadIfNoOtherAttention(selectedThread.worktree.id)
     }
   }, [
     selectedHasLiveTab,
@@ -1728,7 +1756,8 @@ export default function ActivityPrototypePage(): React.JSX.Element {
     stagedThread,
     storeData,
     visiblePortalReady,
-    visibleThread
+    visibleThread,
+    clearWorktreeUnreadIfNoOtherAttention
   ])
 
   const jumpToWorkspace = (thread: AgentPaneThread): void => {
@@ -1748,6 +1777,10 @@ export default function ActivityPrototypePage(): React.JSX.Element {
       return
     }
     storeData.acknowledgeAgents(unreadKeys)
+    const worktreeIds = new Set(allThreads.filter((t) => t.unread).map((t) => t.worktree.id))
+    for (const worktreeId of worktreeIds) {
+      clearWorktreeUnreadIfNoOtherAttention(worktreeId)
+    }
   }
 
   // Why (page padding): no top/horizontal padding so the page reaches the window edges; the titlebar and the right pane's title row (pt-2) supply the top spacing.
