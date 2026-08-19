@@ -3,7 +3,9 @@ import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Repo, Worktree, WorktreeCardProperty } from '../../../../shared/types'
+import type { Repo } from '../../../../shared/repo-types'
+import type { Worktree } from '../../../../shared/worktree/types'
+import type { WorktreeCardProperty } from '../../../../shared/ui-chrome-types'
 
 let worktreeCardProperties: WorktreeCardProperty[] = ['status']
 let experimentalNewWorktreeCardStyle = true
