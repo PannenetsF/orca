@@ -46,9 +46,7 @@ vi.mock('./parked-terminal-command-status', async (importOriginal) => ({
 vi.mock('@/lib/terminal-theme', () => ({ getSystemPrefersDark: () => true }))
 vi.mock('@/store', () => ({ useAppStore: { getState: () => mockStoreState } }))
 
-// Why: these tests exercise the watcher's own registry/store wiring, not
-// connection-routing resolution — stub routing so an agent-status fact reaches
-// setAgentStatus deterministically (rejection covered by returning undefined).
+// Stub routing — these tests cover registry/store wiring, not routing resolution.
 const resolveLiveAgentStatusConnectionRouting = vi.fn()
 vi.mock('@/lib/agent-status-connection-ownership', () => ({
   resolveLiveAgentStatusConnectionRouting
@@ -72,11 +70,7 @@ function createMockStoreState(): MockStoreState {
   }
 }
 
-// Remote-runtime PTYs never reach main, so the renderer is the sole agent-status
-// owner (#15442). The mounted pane's dispose deliberately keeps the claim; the
-// parked watcher must re-register it (preserving hasClientWrite), prove it on
-// each agent-status fact so the mirrored host snapshot can't delete the row, and
-// release it on its own dispose.
+// Remote-runtime PTYs bypass main, so the renderer owns agent status across park/reveal.
 describe('parked watcher renderer-owned agent status for remote-runtime PTYs', () => {
   const originalWindow = (globalThis as { window?: typeof window }).window
   let onData: ((payload: { id: string; data: string }) => void) | null = null
