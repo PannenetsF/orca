@@ -134,10 +134,18 @@ describe('parked watcher renderer-owned agent status for remote-runtime PTYs', (
     resolveLiveAgentStatusConnectionRouting.mockReturnValue(routing)
     const registry = await import('./renderer-owned-agent-status-registry')
 
+    // Simulate the mounted pane's claim that survived its dispose (remote-runtime
+    // PTYs keep the claim across park/reveal); prove it so hasClientWrite is true.
+    const releaseMountedClaim = registry.registerRendererOwnedAgentStatusPane(PANE_KEY, 'env-1')
+    registry.markRendererOwnedAgentStatusWrite(PANE_KEY)
+    expect(registry.isClientAuthoritativeAgentStatusPane(PANE_KEY)).toBe(true)
+
     const dispose = await startWatcher()
     // No raw stream for a remote-runtime PTY — the fact channel is the path.
     expect(onData).toBeNull()
     expect(registry._getRendererOwnedAgentStatusPaneCountForTest()).toBe(1)
+    // The watcher's re-registration must preserve the mounted pane's hasClientWrite.
+    expect(registry.isClientAuthoritativeAgentStatusPane(PANE_KEY)).toBe(true)
 
     await dispatchAgentStatus()
 
@@ -150,6 +158,7 @@ describe('parked watcher renderer-owned agent status for remote-runtime PTYs', (
     )
     expect(registry.isClientAuthoritativeAgentStatusPane(PANE_KEY)).toBe(true)
     dispose()
+    releaseMountedClaim()
   })
 
   it('neither writes status nor proves the claim when routing rejects the fact', async () => {
@@ -166,16 +175,21 @@ describe('parked watcher renderer-owned agent status for remote-runtime PTYs', (
     dispose()
   })
 
-  it('releases the renderer-owned claim on dispose', async () => {
+  it('releases the renderer-owned claim on dispose even without a dispatched fact', async () => {
     resolveLiveAgentStatusConnectionRouting.mockReturnValue({ connectionId: null })
     const registry = await import('./renderer-owned-agent-status-registry')
 
+    const releaseMountedClaim = registry.registerRendererOwnedAgentStatusPane(PANE_KEY, 'env-1')
+    registry.markRendererOwnedAgentStatusWrite(PANE_KEY)
+
     const dispose = await startWatcher()
-    await dispatchAgentStatus()
     expect(registry.isClientAuthoritativeAgentStatusPane(PANE_KEY)).toBe(true)
 
+    // Dispose before any agent-status fact: the release must not be gated on
+    // fact handling, or a parked PTY that never produced status would leak.
     dispose()
     expect(registry._getRendererOwnedAgentStatusPaneCountForTest()).toBe(0)
+    releaseMountedClaim()
   })
 
   it('registers no claim for a non-remote parked PTY', async () => {
