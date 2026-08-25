@@ -2,18 +2,18 @@
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import type {
+  BrowserCertificateFailure,
   BrowserCookieImportResult,
   BrowserCookieImportSummary,
-  BrowserCertificateFailure,
   BrowserHistoryEntry,
   BrowserLoadError,
   BrowserPage,
   BrowserSessionProfile,
   BrowserSessionProfileCreateOptions,
   BrowserViewportPresetId,
-  BrowserWorkspace,
-  WorkspaceSessionState
-} from '../../../../shared/types'
+  BrowserWorkspace
+} from '../../../../shared/browser-workspace-types'
+import type { WorkspaceSessionState } from '../../../../shared/workspace-session-state-types'
 import { GRAB_BUDGET, type BrowserPageAnnotation } from '../../../../shared/browser-grab-types'
 import { FLOATING_TERMINAL_WORKTREE_ID, ORCA_BROWSER_BLANK_URL } from '../../../../shared/constants'
 import { folderWorkspaceKey } from '../../../../shared/workspace-scope'
@@ -23,13 +23,13 @@ import {
   normalizeBrowserHistoryEntries,
   normalizeBrowserHistoryUrl
 } from '../../../../shared/workspace-session-browser-history'
-import { pickNeighbor } from './tab-group-state'
 import { destroyWorkspaceWebviews } from './browser-webview-cleanup'
 import {
   getRecentlyClosedTabPosition,
   restoreRecentlyClosedTabPosition,
   pushRecentlyClosedTabKind
 } from './recently-closed-tabs'
+import { pickNeighbor } from './tab-group-state'
 import type { RecentlyClosedTabPosition } from './recently-closed-tabs'
 import { callRuntimeRpc, type RuntimeClientTarget } from '@/runtime/runtime-rpc-client'
 import { toRuntimeWorktreeSelector } from '@/runtime/runtime-worktree-selector'
@@ -68,6 +68,7 @@ import {
 
 type CreateBrowserTabOptions = {
   activate?: boolean
+  browserPageId?: string
   title?: string
   sessionProfileId?: string | null
   sessionPartition?: string | null
@@ -390,11 +391,12 @@ function buildBrowserPage(
   worktreeId: string,
   url: string,
   title?: string,
-  browserRuntimeEnvironmentId?: string | null
+  browserRuntimeEnvironmentId?: string | null,
+  browserPageId?: string
 ): BrowserPage {
   const normalizedUrl = normalizeUrl(url)
   return {
-    id: createBrowserUuid(),
+    id: browserPageId ?? createBrowserUuid(),
     workspaceId,
     worktreeId,
     url: normalizedUrl,
@@ -599,12 +601,21 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
   createBrowserTab: (worktreeId, url, options) => {
     assertManagedBrowserMaterializationAllowed(get(), options?.browserRuntimeEnvironmentId)
     const workspaceId = createBrowserUuid()
+    const browserPageId = options?.browserPageId
+    if (
+      browserPageId &&
+      (findWorkspace(get().browserTabsByWorktree, browserPageId) ||
+        findPage(get().browserPagesByWorkspace, browserPageId))
+    ) {
+      throw new Error(`Browser page ${browserPageId} already exists`)
+    }
     const page = buildBrowserPage(
       workspaceId,
       worktreeId,
       url,
       options?.title,
-      options?.browserRuntimeEnvironmentId
+      options?.browserRuntimeEnvironmentId,
+      browserPageId
     )
     // Why: with no explicit profile, inherit the user's default so a Settings preference applies to new tabs.
     const sessionProfileId =
@@ -794,6 +805,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
   },
   closeBrowserTab: (tabId) => {
     let remotePagesToClose: { worktreeId: string; handle: RemoteBrowserPageHandle }[] = []
+    let activeBrowserWorktreeIdToNotify: string | null = null
     set((s) => {
       let owningWorktreeId: string | null = null
       let closedWorkspace: BrowserWorkspace | null = null
@@ -835,13 +847,14 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         delete nextRemoteBrowserPageHandlesByPageId[page.id]
       }
 
-      const nextActiveBrowserTabIdByWorktree = { ...s.activeBrowserTabIdByWorktree }
       const remainingBrowserTabs = nextBrowserTabsByWorktree[owningWorktreeId] ?? []
-      const tabBarOrder = s.tabBarOrderByWorktree[owningWorktreeId] ?? []
-      const neighborTabId = pickNeighbor(tabBarOrder, tabId)
+      const nextActiveBrowserTabIdByWorktree = { ...s.activeBrowserTabIdByWorktree }
       if (nextActiveBrowserTabIdByWorktree[owningWorktreeId] === tabId) {
+        const neighborId = pickNeighbor(s.tabBarOrderByWorktree[owningWorktreeId] ?? [], tabId)
         nextActiveBrowserTabIdByWorktree[owningWorktreeId] =
-          neighborTabId ?? remainingBrowserTabs[0]?.id ?? null
+          (neighborId && remainingBrowserTabs.some((tab) => tab.id === neighborId)
+            ? neighborId
+            : remainingBrowserTabs[0]?.id) ?? null
       }
 
       const nextTabBarOrder = {
@@ -853,6 +866,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
 
       const isActiveTabInOwningWorktree =
         s.activeWorktreeId === owningWorktreeId && s.activeBrowserTabId === tabId
+      if (isActiveTabInOwningWorktree) {
+        activeBrowserWorktreeIdToNotify = owningWorktreeId
+      }
       const nextActiveTabTypeByWorktree = { ...s.activeTabTypeByWorktree }
       let nextActiveTabType = s.activeTabType
       if (remainingBrowserTabs.length === 0) {
@@ -905,7 +921,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         browserPagesByWorkspace: nextBrowserPagesByWorkspace,
         activeBrowserTabId:
           s.activeBrowserTabId === tabId
-            ? (neighborTabId ?? remainingBrowserTabs[0]?.id ?? null)
+            ? (nextActiveBrowserTabIdByWorktree[owningWorktreeId] ?? null)
             : s.activeBrowserTabId,
         activeBrowserTabIdByWorktree: nextActiveBrowserTabIdByWorktree,
         tabBarOrderByWorktree: nextTabBarOrder,
@@ -934,6 +950,34 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         get().closeUnifiedTab(workspaceItem.id)
       }
     }
+
+    // Why: announce the MRU page before guest teardown so bridge fallback cannot choose registration order.
+    if (activeBrowserWorktreeIdToNotify) {
+      const state = get()
+      const activeWorkspaceId = state.activeBrowserTabIdByWorktree[activeBrowserWorktreeIdToNotify]
+      const activeWorkspace = activeWorkspaceId
+        ? findWorkspace(state.browserTabsByWorktree, activeWorkspaceId)
+        : null
+      const activePage = activeWorkspace?.activePageId
+        ? (state.browserPagesByWorkspace[activeWorkspace.id] ?? []).find(
+            (page) => page.id === activeWorkspace.activePageId
+          )
+        : undefined
+      if (
+        activeWorkspace?.activePageId &&
+        isLocalBrowserPageOwner(
+          state,
+          activeBrowserWorktreeIdToNotify,
+          activePage?.browserRuntimeEnvironmentId
+        ) &&
+        typeof window !== 'undefined' &&
+        window.api?.browser
+      ) {
+        window.api.browser
+          .notifyActiveTabChanged({ browserPageId: activeWorkspace.activePageId })
+          .catch(() => {})
+      }
+    }
   },
 
   shutdownWorktreeBrowsers: async (worktreeId) => {
@@ -941,8 +985,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
     // Why: snapshot before the loop — closeBrowserTab empties the array, so set() below couldn't recompute hadBrowserTabs.
     const hadBrowserTabs = workspaces.length > 0
     for (const workspace of workspaces) {
-      destroyWorkspaceWebviews(get().browserPagesByWorkspace, workspace.id)
+      const browserPagesByWorkspace = get().browserPagesByWorkspace
       get().closeBrowserTab(workspace.id)
+      destroyWorkspaceWebviews(browserPagesByWorkspace, workspace.id)
     }
     set((s) => {
       const nextBrowserTabsByWorktree = { ...s.browserTabsByWorktree }
@@ -2190,7 +2235,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         const result = await callRuntimeRpc<BrowserProfileImportFromBrowserResult>(
           { kind: 'environment', environmentId: runtimeEnvironmentId },
           'browser.profileImportFromBrowser',
-          { profileId, browserFamily, browserProfile },
+          { profileId, browserFamily, browserProfile, supportsPartitionSkippedCookies: true },
           { timeoutMs: 30_000 }
         )
         if (result.ok) {

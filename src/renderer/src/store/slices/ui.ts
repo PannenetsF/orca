@@ -2,35 +2,35 @@
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import { normalizeRightSidebarRoute } from '../right-sidebar-route'
+import { settleEvictedModalData } from './modal-slot-dismissal'
 import {
   findPrevLiveNonTaskStackHistoryIndex,
-  findPrevLiveWorktreeHistoryIndex
+  rewindHistoryIndexPastView
 } from './worktree-nav-history'
+import type { GitHubWorkItem } from '../../../../shared/github/work-item-types'
+import type { JiraIssue } from '../../../../shared/jira-types'
+import type { LinearIssue } from '../../../../shared/linear/issue-types'
+import type { PersistedTrustedOrcaHooks } from '../../../../shared/orca-yaml-hook-types'
+import type { PersistedUIState } from '../../../../shared/persisted-ui-state-types'
+import type { CustomPet } from '../../../../shared/pet-types'
+import type { TaskProvider } from '../../../../shared/task-providers'
+import type { TuiAgent } from '../../../../shared/tui-agent'
 import type {
-  ChangelogData,
-  CustomPet,
-  GitHubWorkItem,
-  JiraIssue,
-  LinearIssue,
+  AgentActivityDisplayMode,
   ManualRepoOrderEntry,
-  PersistedTrustedOrcaHooks,
-  PersistedUIState,
+  ProjectOrderBy,
   StatusBarItem,
-  TaskProvider,
   TaskResumeState,
   TaskViewPresetId,
-  TuiAgent,
-  UpdateStatus,
-  WorkspaceStatusDefinition,
-  AgentActivityDisplayMode,
-  ProjectOrderBy,
-  WorktreeCardProperty,
-  WorktreeCardMode,
+  TopLevelView,
+  VisibleWorkspaceHostIds,
   WorkspaceHostOrder,
   WorkspaceHostScope,
-  VisibleWorkspaceHostIds,
-  TopLevelView
-} from '../../../../shared/types'
+  WorktreeCardMode,
+  WorktreeCardProperty
+} from '../../../../shared/ui-chrome-types'
+import type { ChangelogData, UpdateStatus } from '../../../../shared/update-status-types'
+import type { WorkspaceStatusDefinition } from '../../../../shared/worktree/types'
 import {
   applyManualRepoOrder,
   normalizeManualRepoOrder
@@ -50,11 +50,12 @@ import {
 import type { GitLabWorkItem } from '../../../../shared/gitlab-types'
 import type { LaunchSource } from '../../../../shared/telemetry-events'
 import type { TaskSourceContext } from '../../../../shared/task-source-context'
-import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/types'
+import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/pet-types'
 import {
   WORKSPACE_CLEANUP_CLASSIFIER_VERSION,
   type WorkspaceCleanupDismissal
 } from '../../../../shared/workspace-cleanup'
+import { normalizeWorkspaceCleanupBrowseState } from '../../../../shared/workspace-cleanup-browse-state'
 import { normalizeFeatureTipIds, type FeatureTipId } from '../../../../shared/feature-tips'
 import {
   hasFeatureInteraction,
@@ -136,6 +137,7 @@ import { getRepoHostIdentity } from './repo-host-identity'
 
 export type PendingSidebarWorktreeReveal = {
   worktreeId: string
+  executionHostId?: ExecutionHostId
   behavior: 'auto' | 'smooth'
   highlight?: boolean
   beginRename?: boolean
@@ -762,6 +764,13 @@ export type UISlice = {
   closeSpacePage: () => void
   openSkillsPage: () => void
   closeSkillsPage: () => void
+  pendingSkillShareId: string | null
+  openSkillShare: (shareId: string) => void
+  clearPendingSkillShare: () => void
+  /** Set when another surface links straight to the page's shared-links view. */
+  pendingSkillsSharedView: boolean
+  openSkillsSharedLinks: () => void
+  clearPendingSkillsSharedView: () => void
   openArtifactsPage: () => void
   closeArtifactsPage: () => void
   openMobilePage: () => void
@@ -853,7 +862,7 @@ export type UISlice = {
   ) => void
   markOrcaHookRepoAlwaysTrusted: (repoId: string) => void
   clearOrcaHookTrustForRepo: (repoId: string) => void
-  setupScriptPromptDismissedRepoIds: string[]
+  setupScriptPromptDismissedRepoIds: readonly string[]
   dismissSetupScriptPrompt: (repoHostIdentity: string) => void
   setupGuideSidebarDismissed: boolean
   setSetupGuideSidebarDismissed: (dismissed: boolean) => void
@@ -967,6 +976,7 @@ export type UISlice = {
       behavior?: PendingSidebarWorktreeReveal['behavior']
       highlight?: boolean
       beginRename?: boolean
+      executionHostId?: ExecutionHostId
     }
   ) => void
   revealSidebarRow: (
@@ -1258,6 +1268,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeAutomations: 'terminal',
   previousViewBeforeSpace: 'terminal',
   previousViewBeforeSkills: 'terminal',
+  pendingSkillShareId: null,
+  pendingSkillsSharedView: false,
   previousViewBeforeMobile: 'terminal',
   previousViewBeforeArtifacts: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
@@ -1471,20 +1483,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     }))
   },
   closeAutomationsPage: () =>
-    set((state) => {
-      const currentEntry = state.worktreeNavHistory[state.worktreeNavHistoryIndex]
-      let nextHistoryIndex = state.worktreeNavHistoryIndex
-      if (currentEntry === 'automations') {
-        const prev = findPrevLiveWorktreeHistoryIndex(state)
-        if (prev !== null) {
-          nextHistoryIndex = prev
-        }
-      }
-      return {
-        activeView: state.previousViewBeforeAutomations,
-        worktreeNavHistoryIndex: nextHistoryIndex
-      }
-    }),
+    set((state) => ({
+      activeView: state.previousViewBeforeAutomations,
+      worktreeNavHistoryIndex: rewindHistoryIndexPastView(state, 'automations')
+    })),
   openSpacePage: () => {
     get().recordFeatureInteraction?.('workspace-cleanup')
     set((state) => ({
@@ -1497,25 +1499,51 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeSpace
     })),
-  openSkillsPage: () =>
+  openSkillsPage: () => {
+    get().recordViewVisit('skills')
     set((state) => ({
       activeView: 'skills',
       previousViewBeforeSkills:
         state.activeView === 'skills' ? state.previousViewBeforeSkills : state.activeView
-    })),
+    }))
+  },
   closeSkillsPage: () =>
     set((state) => ({
-      activeView: state.previousViewBeforeSkills
+      activeView: state.previousViewBeforeSkills,
+      worktreeNavHistoryIndex: rewindHistoryIndexPastView(state, 'skills')
     })),
-  openArtifactsPage: () =>
+  openSkillShare: (shareId) => {
+    get().recordViewVisit('skills')
+    set((state) => ({
+      activeView: 'skills',
+      previousViewBeforeSkills:
+        state.activeView === 'skills' ? state.previousViewBeforeSkills : state.activeView,
+      pendingSkillShareId: shareId
+    }))
+  },
+  clearPendingSkillShare: () => set({ pendingSkillShareId: null }),
+  openSkillsSharedLinks: () => {
+    get().recordViewVisit('skills')
+    set((state) => ({
+      activeView: 'skills',
+      previousViewBeforeSkills:
+        state.activeView === 'skills' ? state.previousViewBeforeSkills : state.activeView,
+      pendingSkillsSharedView: true
+    }))
+  },
+  clearPendingSkillsSharedView: () => set({ pendingSkillsSharedView: false }),
+  openArtifactsPage: () => {
+    get().recordViewVisit('artifacts')
     set((state) => ({
       activeView: 'artifacts',
       previousViewBeforeArtifacts:
         state.activeView === 'artifacts' ? state.previousViewBeforeArtifacts : state.activeView
-    })),
+    }))
+  },
   closeArtifactsPage: () =>
     set((state) => ({
-      activeView: state.previousViewBeforeArtifacts
+      activeView: state.previousViewBeforeArtifacts,
+      worktreeNavHistoryIndex: rewindHistoryIndexPastView(state, 'artifacts')
     })),
   openMobilePage: () =>
     set((state) => ({
@@ -1594,12 +1622,18 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     if (modal === 'add-repo' || modal === 'create-worktree') {
       get().recordFeatureInteraction?.('workspace-creation')
     }
+    const evicted = get().modalData
     set({
       activeModal: modal,
       modalData: data
     })
+    settleEvictedModalData(evicted)
   },
-  closeModal: () => set({ activeModal: 'none', modalData: {} }),
+  closeModal: () => {
+    const evicted = get().modalData
+    set({ activeModal: 'none', modalData: {} })
+    settleEvictedModalData(evicted)
+  },
   featureTipsSeenIds: [],
   markFeatureTipsSeen: (ids) =>
     set((s) => {
@@ -2376,6 +2410,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set({
       pendingRevealWorktree: {
         worktreeId,
+        ...(options?.executionHostId ? { executionHostId: options.executionHostId } : {}),
         behavior: options?.behavior ?? 'smooth',
         ...(options?.highlight ? { highlight: true } : {}),
         ...(options?.beginRename ? { beginRename: true } : {})
@@ -2594,6 +2629,14 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         workspaceCleanupDismissals: sanitizeWorkspaceCleanupDismissals(
           ui.workspaceCleanup?.dismissals
         ),
+        // Why the normalizer rather than a cast: this blob is hand-editable and
+        // may come from an older or newer build; it degrades field by field
+        // instead of bricking the cleanup dialog.
+        // Why: a sync broadcast can carry stale browse state while its writer is debounced.
+        workspaceCleanupBrowse:
+          source === 'startup'
+            ? normalizeWorkspaceCleanupBrowseState(ui.workspaceCleanup?.browse)
+            : s.workspaceCleanupBrowse,
         // Why: restore only on startup; on 'sync' broadcasts it would clobber the window's current per-window view.
         activeView:
           source === 'startup'

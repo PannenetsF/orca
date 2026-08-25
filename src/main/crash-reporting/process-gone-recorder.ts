@@ -2,9 +2,12 @@ import os from 'node:os'
 import { app } from 'electron'
 import {
   isCrashReportReason,
+  sanitizeCrashReportDetails,
   sanitizeCrashReportString,
   type CrashReportBreadcrumbData
 } from '../../shared/crash-reporting'
+import { decodePosixWaitStatus, describePosixWaitStatus } from '../../shared/posix-wait-status'
+import { rendererCrashBreadcrumbOrigin } from '../../shared/crash-breadcrumb-origin'
 import type { CrashReportStore } from './crash-report-store'
 import { getCrashBreadcrumbSnapshot } from './crash-breadcrumb-store'
 import {
@@ -16,16 +19,20 @@ import {
   type ExpectedTeardownScope,
   type ProcessGoneSource
 } from './process-gone-classification'
-import {
-  buildProcessGoneCrashDetails,
-  buildSuppressedProcessGoneBreadcrumbData
-} from './process-gone-diagnostics'
+import { buildProcessGoneCrashDetails } from './process-gone-diagnostics'
+import { buildSuppressedProcessGoneBreadcrumbData } from './suppressed-process-gone-breadcrumb'
 import {
   getProcessGoneDedupeKey,
   processGoneDedupe,
   type ProcessGoneDedupe
 } from './process-gone-dedupe'
 import { getMainProcessLifecycleIdentity } from './main-process-lifecycle-identity'
+import {
+  captureMinidumpSignature,
+  scheduleCrashpadDumpPrune,
+  type CapturedMinidump
+} from './crashpad-capture'
+import { minidumpSignatureDetails } from './minidump-crash-signature'
 import { flushActiveSink, startSpan } from '../observability/tracer'
 
 export type ProcessGoneCrashEvent = {
@@ -35,9 +42,31 @@ export type ProcessGoneCrashEvent = {
   exitCode: number | null
   expectedTeardown: ExpectedTeardownScope
   details: Record<string, unknown>
+  webContentsId?: number
 }
 
-type CrashReportRecorderStore = Pick<CrashReportStore, 'record'>
+type CrashReportRecorderStore = Pick<CrashReportStore, 'record' | 'attachDetails'>
+
+/** Injectable so tests can drive the pairing without a Crashpad handler. */
+export type MinidumpCapture = (
+  crashedAtMs: number,
+  expectedProcessType: string
+) => Promise<CapturedMinidump | null>
+
+const CHILD_CRASHPAD_PROCESS_TYPES: Readonly<Record<string, string>> = {
+  gpu: 'gpu-process',
+  utility: 'utility',
+  zygote: 'zygote'
+}
+
+function expectedCrashpadProcessType(event: ProcessGoneCrashEvent): string | null {
+  return event.source === 'renderer'
+    ? 'renderer'
+    : (CHILD_CRASHPAD_PROCESS_TYPES[event.processType.trim().toLowerCase()] ?? null)
+}
+
+const captureProcessMinidump: MinidumpCapture = (crashedAtMs, expectedProcessType) =>
+  captureMinidumpSignature(crashedAtMs, { expectedProcessType })
 
 // Why: the coalesce map prunes every key against the calling window, so a shorter
 // one here would weaken the other 30s coalescers. Stay uniform with them.
@@ -45,6 +74,12 @@ const SUPPRESSED_PROCESS_GONE_COALESCE_MS = 30_000
 
 function processGoneBreadcrumbData(event: ProcessGoneCrashEvent) {
   return buildSuppressedProcessGoneBreadcrumbData(event)
+}
+
+function processGoneRendererOrigin(event: ProcessGoneCrashEvent): string | undefined {
+  return event.webContentsId === undefined
+    ? undefined
+    : rendererCrashBreadcrumbOrigin(event.webContentsId)
 }
 
 // Why: key off the emitted breadcrumb, not the crash-report dedupe key, so two
@@ -62,6 +97,17 @@ function suppressedProcessGoneCoalesceKey(data: CrashReportBreadcrumbData): stri
   ])
 }
 
+// Why: POSIX exit codes arrive as raw wait statuses (61696 = exit 241); name the
+// meaning on the span so bundles read without manual decoding. Display-only —
+// the recorded exitCode stays raw. launch-failed codes are not wait statuses.
+function decodedExitCodeAttribute(event: ProcessGoneCrashEvent): Record<string, string> {
+  if (process.platform === 'win32' || event.reason === 'launch-failed' || event.exitCode === null) {
+    return {}
+  }
+  const decoded = decodePosixWaitStatus(event.exitCode)
+  return decoded ? { 'crash.exit_code_decoded': describePosixWaitStatus(decoded) } : {}
+}
+
 function persistFailureData(event: ProcessGoneCrashEvent, error: unknown) {
   const errorCode =
     typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -75,14 +121,57 @@ function persistFailureData(event: ProcessGoneCrashEvent, error: unknown) {
   }
 }
 
+/**
+ * Folds the Crashpad signature into a report that is already on disk.
+ *
+ * Why separate from the record write: an exit code of 0x80000003 only says "a
+ * CHECK fired"; the name, file and line live in the dump, which Crashpad is
+ * still writing when process-gone fires. Waiting inline would stall recovery.
+ */
+async function attachMinidumpSignature(
+  store: CrashReportRecorderStore,
+  reportId: string,
+  crashedAtMs: number,
+  expectedProcessType: string | null,
+  capture: MinidumpCapture
+): Promise<void> {
+  const captured = expectedProcessType ? await capture(crashedAtMs, expectedProcessType) : null
+  if (!captured) {
+    await store.attachDetails(reportId, { minidumpStatus: 'absent' })
+    return
+  }
+  const signatureDetails = sanitizeCrashReportDetails(minidumpSignatureDetails(captured.signature))
+  await store.attachDetails(reportId, {
+    ...signatureDetails,
+    minidumpStatus: 'captured',
+    minidumpPath: captured.filePath,
+    minidumpBytes: captured.sizeBytes
+  })
+  // Why: the crash-report record is capped at 5 entries and is user-facing;
+  // the span is what makes the signature countable in the diagnostics bundle.
+  const span = startSpan('electron.minidump_signature', {
+    attributes: {
+      'crash.report_id': reportId,
+      'crash.minidump_bytes': captured.sizeBytes,
+      ...signatureDetails
+    }
+  })
+  span.end()
+  flushActiveSink()
+}
+
 export function recordProcessGoneCrash(
   store: CrashReportRecorderStore | null,
   event: ProcessGoneCrashEvent,
-  dedupe: ProcessGoneDedupe = processGoneDedupe
+  dedupe: ProcessGoneDedupe = processGoneDedupe,
+  capture: MinidumpCapture = captureProcessMinidump
 ): void {
   if (!isCrashReportReason(event.reason)) {
     return
   }
+  // Crashpad captures suppressed service crashes too; keep a crash loop from
+  // filling the disk even when no user-facing report is created.
+  scheduleCrashpadDumpPrune()
   if (
     !shouldRecordProcessGoneCrash({
       source: event.source,
@@ -98,11 +187,15 @@ export function recordProcessGoneCrash(
     // 1459/min) and each suppressed event costs a span plus a forced disk flush,
     // which both floods the 30-entry ring and evicts the real pre-crash trail.
     const suppressedData = processGoneBreadcrumbData(event)
+    const origin = processGoneRendererOrigin(event)
     recordCoalescedDurableCrashBreadcrumb({
       name: 'process_gone_suppressed',
       data: suppressedData,
-      coalesceKey: suppressedProcessGoneCoalesceKey(suppressedData),
-      minIntervalMs: SUPPRESSED_PROCESS_GONE_COALESCE_MS
+      coalesceKey: origin
+        ? `${origin}\u0000${suppressedProcessGoneCoalesceKey(suppressedData)}`
+        : suppressedProcessGoneCoalesceKey(suppressedData),
+      minIntervalMs: SUPPRESSED_PROCESS_GONE_COALESCE_MS,
+      ...(origin ? { origin } : {})
     })
     return
   }
@@ -110,28 +203,40 @@ export function recordProcessGoneCrash(
     recordDurableCrashBreadcrumb(
       'crash_report_store_unavailable',
       processGoneBreadcrumbData(event),
-      'Crash report store unavailable'
+      'Crash report store unavailable',
+      processGoneRendererOrigin(event)
     )
     return
   }
 
-  const key = getProcessGoneDedupeKey(event.source, event.processType, event.reason, event.exitCode)
+  const key = getProcessGoneDedupeKey(
+    event.source,
+    event.processType,
+    event.reason,
+    event.exitCode,
+    event.webContentsId
+  )
   const claim = dedupe.tryClaim(key)
   if (!claim) {
     return
   }
   const mainProcessLifecycle = getMainProcessLifecycleIdentity()
-  const crashDetails = buildProcessGoneCrashDetails({
-    ...event.details,
-    ...mainProcessLifecycle
-  })
-  const breadcrumbs = getCrashBreadcrumbSnapshot()
+  const crashDetails = buildProcessGoneCrashDetails(
+    {
+      ...event.details,
+      ...mainProcessLifecycle
+    },
+    event.processType
+  )
+  const breadcrumbs = getCrashBreadcrumbSnapshot(processGoneRendererOrigin(event))
+  const reportBreadcrumbs = breadcrumbs?.map(({ origin: _origin, ...breadcrumb }) => breadcrumb)
   const span = startSpan('electron.process_gone', {
     attributes: {
       'crash.source': event.source,
       'crash.process_type': event.processType,
       'crash.reason': event.reason,
       ...(event.exitCode !== null ? { 'crash.exit_code': event.exitCode } : {}),
+      ...decodedExitCodeAttribute(event),
       'app.version': app.getVersion(),
       platform: process.platform,
       osRelease: os.release(),
@@ -142,7 +247,7 @@ export function recordProcessGoneCrash(
       'app.main_process.launch_id': mainProcessLifecycle.mainProcessLaunchId,
       'app.main_process.started_at': mainProcessLifecycle.mainProcessStartedAt,
       details: crashDetails,
-      breadcrumbs
+      breadcrumbs: reportBreadcrumbs
     }
   })
   // Why: a renderer crash can be followed by another process exit before the
@@ -152,6 +257,8 @@ export function recordProcessGoneCrash(
   )
   flushActiveSink()
 
+  const crashedAtMs = Date.now()
+  const expectedProcessType = expectedCrashpadProcessType(event)
   void store
     .record({
       source: event.source,
@@ -165,7 +272,26 @@ export function recordProcessGoneCrash(
       electronVersion: process.versions.electron ?? 'unknown',
       chromeVersion: process.versions.chrome ?? 'unknown',
       details: crashDetails,
-      breadcrumbs
+      breadcrumbs: reportBreadcrumbs
+    })
+    .then((report) => {
+      // Why: kept off the returned chain so a minidump failure can never reach
+      // the persist-failure handler below and release a claim that did persist.
+      void attachMinidumpSignature(
+        store,
+        report.id,
+        crashedAtMs,
+        expectedProcessType,
+        capture
+      ).catch((error) => {
+        console.error('[crash-reporting] Failed to attach minidump signature:', error)
+        recordDurableCrashBreadcrumb(
+          'minidump_signature_attach_failed',
+          processGoneBreadcrumbData(event),
+          error instanceof Error ? error.message : String(error),
+          processGoneRendererOrigin(event)
+        )
+      })
     })
     .catch((error) => {
       dedupe.release(claim)
@@ -174,7 +300,8 @@ export function recordProcessGoneCrash(
       recordDurableCrashBreadcrumb(
         'crash_report_persist_failed',
         data,
-        `${String(data.errorName)}: ${String(data.errorMessage)}`
+        `${String(data.errorName)}: ${String(data.errorMessage)}`,
+        processGoneRendererOrigin(event)
       )
     })
 }

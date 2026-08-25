@@ -1,14 +1,12 @@
 import { getDefaultWorkspaceSession } from '../../shared/constants'
 import type { ExecutionHostId } from '../../shared/execution-host'
+import type { BrowserPage, BrowserWorkspace } from '../../shared/browser-workspace-types'
+import type { Tab, TabGroup } from '../../shared/tab-types'
+import type { TerminalTab } from '../../shared/terminal-tab-types'
 import type {
-  BrowserPage,
-  BrowserWorkspace,
   PersistedOpenFile,
-  Tab,
-  TabGroup,
-  TerminalTab,
   WorkspaceSessionState
-} from '../../shared/types'
+} from '../../shared/workspace-session-state-types'
 import { parseWorkspaceKey, worktreeWorkspaceKey } from '../../shared/workspace-scope'
 import {
   isRepoWorktreeId,
@@ -41,6 +39,7 @@ function hasTransferredSessionState(session: WorkspaceSessionState): boolean {
     Object.keys(session.browserTabsByWorktree ?? {}).length > 0 ||
     Object.keys(session.unifiedTabs ?? {}).length > 0 ||
     Object.keys(session.tabGroups ?? {}).length > 0 ||
+    Object.keys(session.lastVisitedAtByWorktreeId ?? {}).length > 0 ||
     Object.keys(session.terminalTopologyRevisionByRepoId ?? {}).length > 0
   )
 }

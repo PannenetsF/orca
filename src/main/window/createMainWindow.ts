@@ -20,6 +20,7 @@ import { normalizeBrowserNavigationUrl } from '../../shared/browser-url'
 import { ORCA_BROWSER_GUEST_WEB_PREFERENCES } from '../../shared/browser-guest-web-preferences'
 import { isCrashReportReason } from '../../shared/crash-reporting'
 import { markSystemSessionEnding } from '../crash-reporting/expected-teardown-state'
+import { recordDurableCrashBreadcrumb } from '../crash-reporting/durable-crash-breadcrumb'
 import {
   DEFAULT_RENDERER_RECOVERY_MAX_RECOVERIES,
   DEFAULT_RENDERER_RECOVERY_WINDOW_MS,
@@ -311,7 +312,16 @@ export function createMainWindow(
 
   // Unlike query-session-end, session-end cannot be canceled before this signal is recorded.
   if (process.platform === 'win32') {
-    mainWindow.on('session-end', markSystemSessionEnding)
+    mainWindow.on('session-end', (event) => {
+      markSystemSessionEnding()
+      // Why: killed/exit-1 tree kills look identical from a user task-kill and an
+      // OS shutdown; this is the only positive OS-shutdown signal bundles get.
+      recordDurableCrashBreadcrumb('system_session_end', {
+        reasons: Array.isArray(event?.reasons)
+          ? event.reasons.filter((reason) => typeof reason === 'string').join(',')
+          : ''
+      })
+    })
   }
 
   if (process.platform === 'darwin') {
@@ -723,6 +733,9 @@ export function createMainWindow(
       case 'openTasks':
         mainWindow.webContents.send('ui:openTasks')
         return
+      case 'toggleAgentDashboard':
+        mainWindow.webContents.send('ui:toggleAgentDashboard')
+        return
       case 'switchRecentTab':
         mainWindow.webContents.send('ui:switchRecentTab')
         return
@@ -798,7 +811,10 @@ export function createMainWindow(
       return true
     }
 
-    if (action.type === 'toggleQuickCommandsMenu' && isAutoRepeat) {
+    if (
+      (action.type === 'toggleQuickCommandsMenu' || action.type === 'deleteCurrentWorkspace') &&
+      isAutoRepeat
+    ) {
       event.preventDefault()
       return true
     }
