@@ -1,6 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, posix } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import {
   APPIMAGE_CLI_COMMAND_NAMES,
   buildElectronRunAsNodeEnv,
@@ -41,7 +41,7 @@ function isExtractedRuntimeExecPath(execPath: string): boolean {
   // (`.../orca-runtime/versions/../native/orca-ide`) can't sneak past a raw
   // substring match, then require `orca-runtime/versions/<something>` as adjacent
   // components rather than a substring anywhere in the string.
-  const segments = posix.normalize(execPath.split('\\').join('/')).split('/')
+  const segments = posix.normalize(execPath.split(win32.sep).join(posix.sep)).split(posix.sep)
   const index = segments.lastIndexOf('orca-runtime')
   return index !== -1 && segments[index + 1] === 'versions' && segments.length > index + 2
 }
