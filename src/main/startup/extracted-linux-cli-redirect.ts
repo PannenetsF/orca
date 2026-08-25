@@ -1,6 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import {
   APPIMAGE_CLI_COMMAND_NAMES,
   buildElectronRunAsNodeEnv,
@@ -37,8 +37,13 @@ const DESKTOP_FLAGS = new Set(['--no-sandbox'])
 // unpacks so chrome-sandbox is never root:root 4755. A native deb/rpm install
 // (/opt/Orca/orca-ide) ships chrome-sandbox root-owned and must not be rerouted.
 function isExtractedRuntimeExecPath(execPath: string): boolean {
-  const normalized = execPath.split('\\').join('/')
-  return normalized.includes('/orca-runtime/versions/')
+  // Normalize both separator styles and collapse `..` so a traversal path
+  // (`.../orca-runtime/versions/../native/orca-ide`) can't sneak past a raw
+  // substring match, then require `orca-runtime/versions/<something>` as adjacent
+  // components rather than a substring anywhere in the string.
+  const segments = posix.normalize(execPath.split('\\').join('/')).split('/')
+  const index = segments.lastIndexOf('orca-runtime')
+  return index !== -1 && segments[index + 1] === 'versions' && segments.length > index + 2
 }
 
 /**

@@ -163,6 +163,25 @@ describe('extracted-tree Linux CLI redirect', () => {
     expect(spawn).not.toHaveBeenCalled()
   })
 
+  it('does not redirect a traversal path that escapes the version tree', () => {
+    const spawn = vi.fn((..._args: unknown[]) => ({ status: 0 }))
+    const result = maybeRedirectExtractedLinuxCliLaunch({
+      argv: ['orca-ide', 'status'],
+      env: {},
+      platform: 'linux',
+      isPackaged: true,
+      resourcesPath: '/whatever',
+      // Resolves outside versions/ — a raw substring match would wrongly accept it.
+      execPath: '/home/orca/.config/orca-runtime/versions/../native/orca-ide',
+      commandNames,
+      exists: (() => true) as never,
+      spawn: spawn as never
+    })
+
+    expect(result).toEqual({ redirected: false })
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
   it('reports a missing CLI entrypoint without spawning', () => {
     const spawn = vi.fn((..._args: unknown[]) => ({ status: 0 }))
     const result = maybeRedirectExtractedLinuxCliLaunch({
