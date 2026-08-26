@@ -62,12 +62,25 @@ describe('deriveComposerAutocomplete — slash', () => {
     expect(result.items).toHaveLength(3)
   })
 
-  it('does not fire slash mode after a space', () => {
-    expect(deriveComposerAutocomplete('/clear now', 10, COMMANDS).mode).toBe('none')
+  it('fires slash mode after a space (word boundary), like $ and @', () => {
+    const result = deriveComposerAutocomplete('/clear now', 10, COMMANDS)
+    // `now` follows a space, so no active slash token at the caret
+    expect(result.mode).toBe('none')
   })
 
-  it('does not fire slash mode mid-line', () => {
-    expect(deriveComposerAutocomplete('hi /clear', 9, COMMANDS).mode).toBe('none')
+  it('fires slash mode mid-line at a word boundary', () => {
+    const result = deriveComposerAutocomplete('hi /cl', 6, COMMANDS)
+    expect(result.mode).toBe('slash')
+    if (result.mode !== 'slash') {
+      return
+    }
+    expect(result.query).toBe('cl')
+    expect(result.triggerKey).toBe('/:3')
+    expect(result.items.map((item) => item.name)).toEqual(['clear'])
+  })
+
+  it('does not fire for a slash with no preceding whitespace (e.g. a path)', () => {
+    expect(deriveComposerAutocomplete('src/index', 9, COMMANDS).mode).toBe('none')
   })
 })
 
@@ -331,6 +344,17 @@ describe('native skill and command picker', () => {
     )
     expect(result.draft).toBe('/browser  trailing')
     expect(result.caret).toBe('/browser '.length)
+  })
+
+  it('replaces a mid-text slash token in place, preserving surrounding text', () => {
+    const result = applyPickerSuggestion(
+      'run /bro then stop',
+      8,
+      { kind: 'skill', id: 'skill:browser', name: 'browser', description: null, sources: [] },
+      '/'
+    )
+    expect(result.draft).toBe('run /browser  then stop')
+    expect(result.caret).toBe('run /browser '.length)
   })
 
   it('classifies sends only from the origin tag and exact command catalog', () => {

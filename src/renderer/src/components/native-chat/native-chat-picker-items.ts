@@ -215,7 +215,7 @@ export function applyPickerSuggestion(
 ): { draft: string; caret: number; insertedToken: string } {
   const before = draft.slice(0, caret)
   const after = draft.slice(caret)
-  const match = prefix === '/' ? before.match(/^\/(\S*)$/) : before.match(/(^|\s)\$(\S*)$/)
+  const match = prefix === '/' ? before.match(/(^|\s)\/(\S*)$/) : before.match(/(^|\s)\$(\S*)$/)
   if (!match) {
     return { draft, caret, insertedToken: '' }
   }
