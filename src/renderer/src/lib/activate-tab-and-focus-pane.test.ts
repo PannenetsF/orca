@@ -103,4 +103,45 @@ describe('activateTabAndFocusPane', () => {
       flashFocusedPane: true
     })
   })
+
+  it('clears a parked focus when a later activation supersedes it', () => {
+    const frameCallbacks: (() => void)[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      frameCallbacks.push(cb)
+      return frameCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn()
+    })
+
+    activateTabAndFocusPane('tab-1', 'leaf-1')
+    frameCallbacks[0]?.()
+    activateTabAndFocusPane('tab-2', 'leaf-2')
+
+    expect(consumePendingPaneFocus('tab-1')).toBeNull()
+    frameCallbacks[1]?.()
+    expect(consumePendingPaneFocus('tab-2')).toEqual({
+      tabId: 'tab-2',
+      leafId: 'leaf-2'
+    })
+  })
+
+  it('clears a parked focus when a later tab-only activation supersedes it', () => {
+    const frameCallbacks: (() => void)[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      frameCallbacks.push(cb)
+      return frameCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn()
+    })
+
+    activateTabAndFocusPane('tab-1', 'leaf-1')
+    frameCallbacks[0]?.()
+    activateTabAndFocusPane('tab-2', null)
+
+    expect(consumePendingPaneFocus('tab-1')).toBeNull()
+  })
 })

@@ -14438,7 +14438,7 @@
     },
     "terminal": {
       "closed": "No live terminal — this agent's pane has closed.",
-      "remoteUnavailable": "Live preview is unavailable for this remote session — open the worktree to view the terminal.",
+      "remoteUnavailable": "La vista previa en vivo no está disponible para esta sesión remota; abre el worktree para ver la terminal.",
       "focusWorktree": "Focus worktree",
       "close": "Close"
     },

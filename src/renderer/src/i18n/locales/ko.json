@@ -14438,7 +14438,7 @@
     },
     "terminal": {
       "closed": "No live terminal — this agent's pane has closed.",
-      "remoteUnavailable": "Live preview is unavailable for this remote session — open the worktree to view the terminal.",
+      "remoteUnavailable": "이 원격 세션의 라이브 미리보기를 사용할 수 없습니다. 터미널을 보려면 워크트리를 여세요.",
       "focusWorktree": "Focus worktree",
       "close": "Close"
     },
