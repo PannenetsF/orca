@@ -14859,6 +14859,7 @@
     },
     "terminal": {
       "closed": "実行中のターミナルがありません。この Agent のペインは閉じられています。",
+      "remoteUnavailable": "Live preview is unavailable for this remote session — open the worktree to view the terminal.",
       "focusWorktree": "ワークツリーを開く",
       "close": "閉じる"
     },

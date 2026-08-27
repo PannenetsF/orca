@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { activateTabAndFocusPane } from './activate-tab-and-focus-pane'
+import { consumePendingPaneFocus } from './pending-pane-focus'
 
 const setActiveTab = vi.hoisted(() => vi.fn())
 const setActiveTabType = vi.hoisted(() => vi.fn())
@@ -80,5 +81,26 @@ describe('activateTabAndFocusPane', () => {
     expect(setActiveTab).toHaveBeenCalledWith('tab-1')
     expect(requestAnimationFrame).not.toHaveBeenCalled()
     expect(dispatchEvent).not.toHaveBeenCalled()
+  })
+
+  it('parks the focus detail so a late-mounting pane can consume it', () => {
+    const frameCallbacks: (() => void)[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      frameCallbacks.push(cb)
+      return 12
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn()
+    })
+
+    activateTabAndFocusPane('tab-1', 'leaf-1', { flashFocusedPane: true })
+    expect(consumePendingPaneFocus('tab-1')).toBeNull()
+    frameCallbacks[0]?.()
+    expect(consumePendingPaneFocus('tab-1')).toEqual({
+      tabId: 'tab-1',
+      leafId: 'leaf-1',
+      flashFocusedPane: true
+    })
   })
 })
