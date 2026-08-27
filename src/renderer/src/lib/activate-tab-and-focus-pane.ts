@@ -1,5 +1,6 @@
 import { useAppStore } from '@/store'
 import { FOCUS_TERMINAL_PANE_EVENT, type FocusTerminalPaneDetail } from '@/constants/terminal'
+import { queuePaneFocus } from './pending-pane-focus'
 
 let pendingFocusPaneFrameId: number | null = null
 
@@ -41,6 +42,9 @@ export function activateTabAndFocusPane(
         ? { scrollToBottomIfOutputSinceLastView: true }
         : {})
     }
+    // Why: park the detail too — a cold-parked pane mounts its listener after
+    // this frame and would otherwise miss the dispatch entirely.
+    queuePaneFocus(tabId, detail)
     window.dispatchEvent(
       new CustomEvent<FocusTerminalPaneDetail>(FOCUS_TERMINAL_PANE_EVENT, {
         detail
