@@ -202,7 +202,7 @@ describe('apply suggestions', () => {
 
   it('applyMentionSuggestion replaces the active @token at the caret', () => {
     const result = applyMentionSuggestion('open @sr more', 8, 'src/app.ts')
-    expect(result.draft).toBe('open @src/app.ts  more')
+    expect(result.draft).toBe('open @src/app.ts more')
     expect(result.caret).toBe('open @src/app.ts '.length)
   })
 
@@ -213,7 +213,7 @@ describe('apply suggestions', () => {
       { kind: 'skill', id: 'skill:typescript', name: 'typescript', description: null, sources: [] },
       '$'
     )
-    expect(result.draft).toBe('use $typescript  now')
+    expect(result.draft).toBe('use $typescript now')
     expect(result.caret).toBe('use $typescript '.length)
   })
 })
@@ -342,7 +342,7 @@ describe('native skill and command picker', () => {
       { kind: 'skill', id: 'skill:browser', name: 'browser', description: null, sources: [] },
       '/'
     )
-    expect(result.draft).toBe('/browser  trailing')
+    expect(result.draft).toBe('/browser trailing')
     expect(result.caret).toBe('/browser '.length)
   })
 
@@ -353,8 +353,19 @@ describe('native skill and command picker', () => {
       { kind: 'skill', id: 'skill:browser', name: 'browser', description: null, sources: [] },
       '/'
     )
-    expect(result.draft).toBe('run /browser  then stop')
+    expect(result.draft).toBe('run /browser then stop')
     expect(result.caret).toBe('run /browser '.length)
+  })
+
+  it('inserts a separator when no whitespace follows the caret', () => {
+    const result = applyPickerSuggestion(
+      '/bro',
+      4,
+      { kind: 'skill', id: 'skill:browser', name: 'browser', description: null, sources: [] },
+      '/'
+    )
+    expect(result.draft).toBe('/browser ')
+    expect(result.caret).toBe('/browser '.length)
   })
 
   it('classifies sends only from the origin tag and exact command catalog', () => {
