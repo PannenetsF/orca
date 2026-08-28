@@ -51,7 +51,10 @@ function AgentDashboardDrawerBody({
       // Why: bare setActiveWorktree skips setActiveView('terminal') and the
       // initial-terminal/session-resume guards a remote worktree needs before
       // its pane can mount and receive the focus event.
-      activateAndRevealWorktree(args.worktreeId, { revealInSidebar: false })
+      activateAndRevealWorktree(args.worktreeId, {
+        revealInSidebar: false,
+        executionHostId: args.executionHostId
+      })
       activateTabAndFocusPane(args.tabId, args.leafId, { flashFocusedPane: true })
       onClose()
     },

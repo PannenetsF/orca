@@ -1,13 +1,18 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RpcClient } from '../transport/rpc-client'
 import { markRpcDeliveryUnknown } from '../transport/rpc-delivery-ambiguity'
 import { LogicalClientCutoverError } from '../transport/stable-logical-rpc-client'
 import {
   MOBILE_NATIVE_CHAT_SEND_TIMEOUT_MS,
   openMobileNativeChatSendBudget,
+  clearMobileNativeChatInput,
   sendMobileNativeChatMessage,
-  sendMobileNativeChatMessageWithOutcome
+  sendMobileNativeChatMessageWithOutcome,
+  typeMobileNativeChatCommandWithOutcome
 } from './mobile-native-chat-send'
+import { buildAgentTuiClearInputForText } from '../../../src/shared/agent-tui-input-clear'
+
+afterEach(() => vi.useRealTimers())
 
 function clientWithResponse(response: unknown): RpcClient {
   return {
@@ -29,6 +34,7 @@ describe('sendMobileNativeChatMessage', () => {
         client,
         terminal: 'term',
         text: 'hello',
+        resolvedLaunchDraft: { text: 'seed', createdAt: 7 },
         mobileClient: { id: 'device', type: 'mobile' }
       })
     ).resolves.toBe(true)
@@ -38,6 +44,7 @@ describe('sendMobileNativeChatMessage', () => {
         terminal: 'term',
         text: 'hello',
         enter: true,
+        resolvedLaunchDraft: { text: 'seed', createdAt: 7 },
         client: { id: 'device', type: 'mobile' }
       },
       { timeoutMs: MOBILE_NATIVE_CHAT_SEND_TIMEOUT_MS, budgetSpansConnect: true }
@@ -169,7 +176,7 @@ describe('sendMobileNativeChatMessage', () => {
     ).resolves.toBe('rejected')
   })
 
-  it('prepends the input-line clear byte when clearInputFirst is set', async () => {
+  it('never bundles terminal controls into the submitted body', async () => {
     const client = clientWithResponse({
       id: 'request',
       ok: true,
@@ -180,14 +187,13 @@ describe('sendMobileNativeChatMessage', () => {
     await sendMobileNativeChatMessage({
       client,
       terminal: 'term',
-      text: 'hello',
-      clearInputFirst: true
+      text: 'hello'
     })
     expect(client.sendRequest).toHaveBeenCalledWith(
       'terminal.send',
       {
         terminal: 'term',
-        text: '\x15hello',
+        text: 'hello',
         enter: true
       },
       { timeoutMs: MOBILE_NATIVE_CHAT_SEND_TIMEOUT_MS, budgetSpansConnect: true }
@@ -207,8 +213,7 @@ describe('sendMobileNativeChatMessage', () => {
     await sendMobileNativeChatMessage({
       client,
       terminal: 'term',
-      text: 'what is this',
-      clearInputFirst: false
+      text: 'what is this'
     })
     const sent = vi.mocked(client.sendRequest).mock.calls[0]?.[1] as { text: string }
     expect(sent.text).toBe('what is this')
@@ -283,5 +288,111 @@ describe('sendMobileNativeChatMessage', () => {
     const budget = openMobileNativeChatSendBudget() - Date.now()
     expect(budget).toBeGreaterThan(MOBILE_NATIVE_CHAT_SEND_TIMEOUT_MS - 1_000)
     expect(budget).toBeLessThanOrEqual(MOBILE_NATIVE_CHAT_SEND_TIMEOUT_MS)
+  })
+})
+
+describe('typeMobileNativeChatCommandWithOutcome', () => {
+  it('writes the Codex picker command as keys instead of one pasted text write', async () => {
+    vi.useFakeTimers()
+    const client = clientWithResponse({
+      id: 'request',
+      ok: true,
+      result: { send: { accepted: true } },
+      _meta: { runtimeId: 'runtime' }
+    })
+    const result = typeMobileNativeChatCommandWithOutcome({
+      client,
+      terminal: 'term',
+      command: '/model'
+    })
+    await vi.runAllTimersAsync()
+
+    await expect(result).resolves.toBe('accepted')
+    expect(
+      vi.mocked(client.sendRequest).mock.calls.map((call) => {
+        const params = call[1] as { text: string; enter: boolean }
+        return { text: params.text, enter: params.enter }
+      })
+    ).toEqual(
+      ['\x15', '/', 'm', 'o', 'd', 'e', 'l', '\r'].map((text) => ({
+        text,
+        enter: false
+      }))
+    )
+  })
+
+  it('retires a parked launch draft only with the final typed Enter', async () => {
+    vi.useFakeTimers()
+    const client = clientWithResponse({
+      id: 'request',
+      ok: true,
+      result: { send: { accepted: true } },
+      _meta: { runtimeId: 'runtime' }
+    })
+    const result = typeMobileNativeChatCommandWithOutcome({
+      client,
+      terminal: 'term',
+      command: '/model',
+      resolvedLaunchDraft: { text: 'seed', createdAt: 7 }
+    })
+    await vi.runAllTimersAsync()
+    await result
+
+    const params = vi.mocked(client.sendRequest).mock.calls.map((call) => call[1]) as Array<{
+      text: string
+      resolvedLaunchDraft?: { text: string; createdAt: number }
+    }>
+    expect(params.slice(0, -1).every((entry) => entry.resolvedLaunchDraft === undefined)).toBe(true)
+    expect(params.at(-1)).toMatchObject({
+      text: '\r',
+      resolvedLaunchDraft: { text: 'seed', createdAt: 7 }
+    })
+  })
+})
+
+describe('clearMobileNativeChatInput', () => {
+  const accepted = {
+    id: 'request',
+    ok: true,
+    result: { send: { accepted: true } },
+    _meta: { runtimeId: 'runtime' }
+  }
+  const params = (client: RpcClient) =>
+    vi.mocked(client.sendRequest).mock.calls[0]![1] as { text: string; enter: boolean }
+
+  it('writes the burst as its OWN non-submitting write', async () => {
+    // Bundling the burst into the body write reached the agent as LITERAL Ctrl+U
+    // text and the parked draft concatenated (observed live).
+    const client = clientWithResponse(accepted)
+    const clearInput = buildAgentTuiClearInputForText('Linked Linear issue: ABC-123\nhttps://x')
+    await expect(
+      clearMobileNativeChatInput({ client, terminal: 'term', clearInput })
+    ).resolves.toBe(true)
+    expect(params(client)).toMatchObject({ text: clearInput, enter: false })
+  })
+
+  it('reports failure when the host rejects the clear', async () => {
+    const client = clientWithResponse({
+      id: 'request',
+      ok: true,
+      result: { send: { accepted: false } },
+      _meta: { runtimeId: 'runtime' }
+    })
+    await expect(
+      clearMobileNativeChatInput({ client, terminal: 'term', clearInput: '\x15' })
+    ).resolves.toBe(false)
+  })
+
+  it('refuses to start an underfunded clear rather than half-clearing', async () => {
+    const client = clientWithResponse(accepted)
+    await expect(
+      clearMobileNativeChatInput({
+        client,
+        terminal: 'term',
+        clearInput: '\x15',
+        deadline: Date.now() + 10
+      })
+    ).resolves.toBe(false)
+    expect(client.sendRequest).not.toHaveBeenCalled()
   })
 })

@@ -55,20 +55,59 @@ describe('subscribeRuntimeClientEvents', () => {
       }
     })
     capturedOnResponse({
+      ok: true,
+      result: {
+        type: 'nativeChatLaunchDraftResolved',
+        tabId: 'tab-1',
+        text: 'seed',
+        createdAt: 7
+      }
+    })
+    capturedOnResponse({
       ok: false,
       error: { code: 'method_not_found', message: 'missing' }
     })
 
-    expect(onEvent).toHaveBeenCalledTimes(2)
+    expect(onEvent).toHaveBeenCalledTimes(3)
     expect(onEvent).toHaveBeenCalledWith({ type: 'worktreesChanged', repoId: 'repo-1' })
     expect(onEvent).toHaveBeenCalledWith({
       type: 'terminalSideEffects',
       batch: { ptyId: 'pty-1', seq: 7, facts: [{ kind: 'bell' }] }
     })
+    expect(onEvent).toHaveBeenCalledWith({
+      type: 'nativeChatLaunchDraftResolved',
+      tabId: 'tab-1',
+      text: 'seed',
+      createdAt: 7
+    })
     expect(onError).toHaveBeenCalledWith({ code: 'method_not_found', message: 'missing' })
 
     subscription.unsubscribe()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('forwards automationsChanged and still drops event types it does not know', async () => {
+    let capturedOnResponse: ((response: unknown) => void) | undefined
+    const subscribe = vi.fn(async (_args, nextCallbacks) => {
+      capturedOnResponse = (nextCallbacks as { onResponse: (response: unknown) => void }).onResponse
+      return { unsubscribe: vi.fn(), sendBinary: vi.fn() }
+    })
+    const onEvent = vi.fn()
+    const onError = vi.fn()
+    vi.stubGlobal('window', { api: { runtimeEnvironments: { subscribe } } })
+
+    await subscribeRuntimeClientEvents('env-1', onEvent, onError)
+    if (!capturedOnResponse) {
+      throw new Error('Expected subscription callbacks')
+    }
+
+    capturedOnResponse({ ok: true, result: { type: 'automationsChanged', reason: 'run' } })
+    // Why: the same allowlist is what makes this event additive for old clients.
+    capturedOnResponse({ ok: true, result: { type: 'automationsFromTheFuture' } })
+
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith({ type: 'automationsChanged', reason: 'run' })
+    expect(onError).not.toHaveBeenCalled()
   })
 
   it('signals a replay-tagged response so event-derived state can resync after a reconnect', async () => {

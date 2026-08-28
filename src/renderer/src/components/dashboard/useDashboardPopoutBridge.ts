@@ -2,8 +2,10 @@ import { useEffect } from 'react'
 import { useAppStore, type AppState } from '@/store'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { runSleepWorktree } from '../sidebar/sleep-worktree-flow'
 import type { RepoIcon } from '../../../../shared/repo-icon'
 import { buildDashboardSnapshot, type DashboardSnapshotState } from './build-dashboard-snapshot'
+import { launchDashboardAgent } from './launch-dashboard-agent'
 
 // Why: cap snapshot rebuilds during bursts of agent-status pings. The board is a
 // glanceable surface, so ~4 updates/sec is plenty and keeps the cross-worktree
@@ -45,7 +47,6 @@ export function dashboardSnapshotInputsChanged(
     state.repos !== previousState.repos ||
     state.worktreesByRepo !== previousState.worktreesByRepo ||
     state.tabsByWorktree !== previousState.tabsByWorktree ||
-    state.agentStatusByPaneKey !== previousState.agentStatusByPaneKey ||
     state.retainedAgentsByPaneKey !== previousState.retainedAgentsByPaneKey ||
     state.migrationUnsupportedByPtyId !== previousState.migrationUnsupportedByPtyId ||
     state.runtimeAgentOrchestrationByPaneKey !== previousState.runtimeAgentOrchestrationByPaneKey ||
@@ -58,8 +59,11 @@ export function dashboardSnapshotInputsChanged(
     // Why: settings controls idle visibility and generated conversation names.
     state.settings !== previousState.settings ||
     state.workspaceStatuses !== previousState.workspaceStatuses ||
-    // Why: freshness can change a bucket without replacing any backing map.
-    state.agentStatusEpoch !== previousState.agentStatusEpoch ||
+    state.detectedAgentIds !== previousState.detectedAgentIds ||
+    state.remoteDetectedAgentIds !== previousState.remoteDetectedAgentIds ||
+    state.runtimeDetectedAgentIds !== previousState.runtimeDetectedAgentIds ||
+    // Live hook status is relayed straight from main to the pop-out. Rebuilding
+    // every card here would put map refresh work on the main renderer's hot path.
     // Why: each card carries the host-input profile its preview terminal keys
     // against, and the pop-out cannot re-derive it. Every slice that resolves
     // an execution host must republish or the preview keeps encoding bytes for
@@ -75,6 +79,7 @@ export function dashboardSnapshotInputsChanged(
     // these two instead of worktreesByRepo.
     state.folderWorkspaces !== previousState.folderWorkspaces ||
     state.projectGroups !== previousState.projectGroups ||
+    state.sshTargetLabels !== previousState.sshTargetLabels ||
     state.restoredRuntimeHostIdByWorkspaceSessionKey !==
       previousState.restoredRuntimeHostIdByWorkspaceSessionKey ||
     state.runtimeEnvironments !== previousState.runtimeEnvironments ||
@@ -108,11 +113,32 @@ export function useDashboardPopoutBridge(enabled: boolean): void {
     if (!enabled) {
       return
     }
+    return window.api.dashboard.onSpawnAgent?.(launchDashboardAgent)
+  }, [enabled])
+
+  // Sleeping from the popout runs the shared teardown here, where the store and
+  // the live terminal panes are — the popout only names the workspace.
+  useEffect(() => {
+    if (!enabled) {
+      return
+    }
+    return window.api.dashboard.onSleepWorkspace?.(({ worktreeId }) => {
+      void runSleepWorktree(worktreeId)
+    })
+  }, [enabled])
+
+  useEffect(() => {
+    if (!enabled) {
+      return
+    }
     return window.api.dashboard.onRevealAgent((args) => {
       // Why: bare setActiveWorktree skips setActiveView('terminal') and the
       // initial-terminal/session-resume guards a remote worktree needs before
       // its pane can mount and receive the focus event.
-      activateAndRevealWorktree(args.worktreeId, { revealInSidebar: false })
+      activateAndRevealWorktree(args.worktreeId, {
+        revealInSidebar: false,
+        executionHostId: args.executionHostId
+      })
       activateTabAndFocusPane(args.tabId, args.leafId, { flashFocusedPane: true })
     })
   }, [enabled])

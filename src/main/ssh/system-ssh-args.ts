@@ -2,16 +2,21 @@ import type { SshTarget } from '../../shared/ssh-types'
 import { getControlSocketPath, type SystemSshResolvedConfig } from './ssh-control-socket'
 
 export type SystemSshBuildArgsOptions = {
+  configFile?: string
   resolvedConfig?: SystemSshResolvedConfig | null
   disableControlMaster?: boolean
   suppressOrcaControlMaster?: boolean
   gssapiOnly?: boolean
+  nonInteractive?: boolean
 }
 
 export function buildSshArgs(target: SshTarget, options?: SystemSshBuildArgsOptions): string[] {
   const args: string[] = []
 
-  args.push('-o', options?.gssapiOnly ? 'BatchMode=yes' : 'BatchMode=no')
+  if (options?.configFile) {
+    args.push('-F', options.configFile)
+  }
+  args.push('-o', options?.gssapiOnly || options?.nonInteractive ? 'BatchMode=yes' : 'BatchMode=no')
   if (options?.gssapiOnly) {
     // Why: the probe must neither authenticate with a key nor open an OpenSSH
     // credential prompt; failure belongs to Orca's existing ssh2 prompt path.
@@ -77,7 +82,9 @@ export function buildSshArgs(target: SshTarget, options?: SystemSshBuildArgsOpti
   }
 
   const host = target.configHost || target.host
-  const userHost = target.username ? `${target.username}@${host}` : host
+  // Why: OpenSSH owns User for config-backed aliases; imported fallback values
+  // must not override a fresh wildcard, Include, or Match result.
+  const userHost = useConfigHost ? host : target.username ? `${target.username}@${host}` : host
   args.push('--', userHost)
 
   return args
@@ -97,6 +104,9 @@ export function getSystemSshBuildArgsFromOperationOptions(
   options: SystemSshBuildArgsOptions | undefined
 ): SystemSshBuildArgsOptions | undefined {
   const buildArgsOptions: SystemSshBuildArgsOptions = {}
+  if (options?.configFile !== undefined) {
+    buildArgsOptions.configFile = options.configFile
+  }
   if (options?.resolvedConfig !== undefined) {
     buildArgsOptions.resolvedConfig = options.resolvedConfig
   }
@@ -108,6 +118,9 @@ export function getSystemSshBuildArgsFromOperationOptions(
   }
   if (options?.gssapiOnly === true) {
     buildArgsOptions.gssapiOnly = true
+  }
+  if (options?.nonInteractive === true) {
+    buildArgsOptions.nonInteractive = true
   }
   return Object.keys(buildArgsOptions).length === 0 ? undefined : buildArgsOptions
 }
@@ -166,7 +179,9 @@ function shouldUseOpenSshConfigHost(target: SshTarget): boolean {
   return isOpenSshConfigBackedTarget(target)
 }
 
-export function isOpenSshConfigBackedTarget(target: SshTarget): boolean {
+export function isOpenSshConfigBackedTarget(
+  target: Pick<SshTarget, 'source' | 'configHost' | 'host'>
+): boolean {
   if (target.source === 'ssh-config') {
     return true
   }
