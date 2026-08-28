@@ -86,13 +86,16 @@ describe('subscribeRuntimeClientEvents', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
+
   it('forwards cloneProgress event frames', async () => {
+
     let capturedOnResponse: ((response: unknown) => void) | undefined
     const subscribe = vi.fn(async (_args, nextCallbacks) => {
       capturedOnResponse = (nextCallbacks as { onResponse: (response: unknown) => void }).onResponse
       return { unsubscribe: vi.fn(), sendBinary: vi.fn() }
     })
     const onEvent = vi.fn()
+
     vi.stubGlobal('window', { api: { runtimeEnvironments: { subscribe } } })
 
     await subscribeRuntimeClientEvents('env-1', onEvent)
@@ -107,6 +110,33 @@ describe('subscribeRuntimeClientEvents', () => {
     }
     capturedOnResponse({ ok: true, result: cloneProgress })
     expect(onEvent).toHaveBeenCalledWith(cloneProgress)
+  })
+
+  it('forwards automationsChanged and still drops event types it does not know', async () => {
+
+    let capturedOnResponse: ((response: unknown) => void) | undefined
+    const subscribe = vi.fn(async (_args, nextCallbacks) => {
+      capturedOnResponse = (nextCallbacks as { onResponse: (response: unknown) => void }).onResponse
+      return { unsubscribe: vi.fn(), sendBinary: vi.fn() }
+    })
+    const onEvent = vi.fn()
+
+    const onError = vi.fn()
+    vi.stubGlobal('window', { api: { runtimeEnvironments: { subscribe } } })
+
+    await subscribeRuntimeClientEvents('env-1', onEvent, onError)
+    if (!capturedOnResponse) {
+      throw new Error('Expected subscription callbacks')
+    }
+
+    capturedOnResponse({ ok: true, result: { type: 'automationsChanged', reason: 'run' } })
+    // Why: the same allowlist is what makes this event additive for old clients.
+    capturedOnResponse({ ok: true, result: { type: 'automationsFromTheFuture' } })
+
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith({ type: 'automationsChanged', reason: 'run' })
+    expect(onError).not.toHaveBeenCalled()
+
   })
 
   it('signals a replay-tagged response so event-derived state can resync after a reconnect', async () => {
