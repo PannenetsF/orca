@@ -350,7 +350,7 @@ const customForgeProvider = {
     )
   },
   async createReview(repoPath, input, connectionId, options) {
-    const ref = await resolveCustomGitServerRef({ repoPath, connectionId, ...(options ?? {}) })
+    const ref = await resolveCustomGitServerRef({ repoPath, connectionId, ...options })
     if (!ref) {
       return {
         ok: false,
