@@ -45,20 +45,17 @@ import { hasFeatureInteraction } from '../../../shared/feature-interactions'
 import BrowserPane from './browser-pane/BrowserPane'
 import { RetainedBrowserPaneOverlayLayer } from './browser-pane/assemble-chrome/BrowserPaneOverlayLayer'
 import EmulatorPaneOverlayLayer from './emulator-pane/EmulatorPaneOverlayLayer'
+import { useClientHostedBrowserRows } from '@/lib/pane-manager/client-hosted-browser-row-state'
 import {
-  isBrowserAutomationVisible,
-  onBrowserAutomationVisibilityChange,
-  useBrowserAutomationVisibilityForAny
-} from './browser-pane/host-guest/browser-automation-visibility'
-import {
-  isBrowserPageMobileDriven,
-  onBrowserDriverChange,
-  useBrowserMobileDriverForAny
-} from '@/lib/pane-manager/browser-mobile-driver-state'
-import {
+  onBrowserGuestPaintRetentionChange,
   useAnyBrowserGuestNeedsPaint,
+  useBrowserGuestPaintRetention,
   useWorktreeBrowserPageIds
 } from './browser-pane/host-guest/browser-guest-paint-retention'
+import {
+  shouldKeepHiddenWorktreeSurfacePaintable,
+  shouldMountRetainedBrowserOverlay
+} from './browser-pane/host-guest/browser-worktree-surface-paintability'
 import TerminalPaneOverlayLayer from './terminal-pane/TerminalPaneOverlayLayer'
 import {
   collectBrowserWebviewIds,
@@ -67,15 +64,12 @@ import {
   destroyWorktreeBrowserGuests
 } from '../store/slices/browser-webview-cleanup'
 import {
-  browserTabVisibilityPageIds,
+  browserTabsVetoGuestEviction,
   selectBrowserGuestEvictionWorktreeIds,
   touchBrowserGuestWorktreeRecency,
   worktreeHoldsLiveBrowserGuests
 } from './browser-pane/host-guest/browser-guest-worktree-retention'
-import {
-  hasActiveBrowserPageDownload,
-  installBrowserPageDownloadActivityTracking
-} from './browser-pane/navigate/browser-page-download-activity'
+import { installBrowserPageDownloadActivityTracking } from './browser-pane/navigate/browser-page-download-activity'
 import { hasLiveBrowserGuest } from './browser-pane/host-guest/webview-registry'
 import {
   handleSwitchRecentTab,
@@ -144,7 +138,11 @@ import {
 } from './terminal-pane/terminal-parked-tab-watchers'
 import { isMainTerminalSideEffectAuthorityForPty } from './terminal-pane/terminal-side-effect-facts-handler'
 import { appendUniqueOpenFileIds } from './terminal/unsaved-close-queue'
-import { setWindowCloseRequestHandler } from './window-close-request-coordinator'
+import {
+  runWithWindowCloseCheckpointScope,
+  setWindowCloseRequestHandler
+} from './window-close-request-coordinator'
+import { showShutdownCheckpointFailureToast } from '@/lib/shutdown-checkpoint-failure-toast'
 import {
   findActivityTerminalPortal,
   useActivityTerminalPortals,
@@ -153,7 +151,6 @@ import {
 import { isRemoteRuntimePtyId } from '@/runtime/runtime-terminal-inspection'
 import {
   activateWebRuntimeSessionTab,
-  closeWebRuntimeSessionTab,
   createWebRuntimeSessionBrowserTab,
   createWebRuntimeSessionTerminal,
   isWebRuntimeSessionActive
@@ -187,6 +184,7 @@ import { translate } from '@/i18n/i18n'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 import { getResolvedExecutionHostIdForWorktree } from '@/lib/resolved-worktree-execution-host'
 import { browserWorkspaceHasRemoteOwner } from '@/runtime/remote-browser-tab-ownership'
+import { closeBrowserWorkspaceTabOnHosts } from '@/runtime/browser-workspace-tab-close'
 import {
   combineTerminalWorktreeParkIds,
   useManualTerminalWorktreeParking
@@ -465,6 +463,9 @@ function Terminal(): React.JSX.Element | null {
   const worktreeBrowserTabs = renderedActiveWorktreeId
     ? (browserTabsByWorktree[renderedActiveWorktreeId] ?? [])
     : []
+  // Why: this strip only renders before the worktree has a layout, which is exactly when a paired
+  // client can have opened a page the host never has. Without a row here it stays uncloseable.
+  const worktreeClientHostedBrowserRows = useClientHostedBrowserRows(renderedActiveWorktreeId ?? '')
   const getEffectiveLayoutForWorktree = useCallback(
     (worktreeId: string) =>
       getEffectiveLayout(worktreeId, layoutByWorktree, groupsByWorktree, activeGroupIdByWorktree),
@@ -527,8 +528,14 @@ function Terminal(): React.JSX.Element | null {
   const confirmNativeWindowClose = useCallback(() => {
     // Why: capture only after every close guard has committed. A canceled child-
     // process prompt must not consume App's synthetic/native unload guard.
-    const accepted = window.dispatchEvent(new Event('beforeunload', { cancelable: true }))
+    const accepted = runWithWindowCloseCheckpointScope(() =>
+      window.dispatchEvent(new Event('beforeunload', { cancelable: true }))
+    )
     if (!accepted) {
+      // Why: a checkpoint-vetoed quit used to die here with no dialog and no log,
+      // leaving SIGKILL as the only exit (#15352). The dirty-file veto publishes
+      // no reason — its deferred dialog flow already gives the user a surface.
+      showShutdownCheckpointFailureToast()
       return
     }
     window.api.ui.confirmWindowClose()
@@ -1225,12 +1232,10 @@ function Terminal(): React.JSX.Element | null {
       setBrowserGuestRetentionRevision((revision) => revision + 1)
     }
     const removeDownloadTracking = installBrowserPageDownloadActivityTracking(invalidateRetention)
-    const removeAutomationTracking = onBrowserAutomationVisibilityChange(invalidateRetention)
-    const removeMobileTracking = onBrowserDriverChange(invalidateRetention)
+    const removePaintRetentionTracking = onBrowserGuestPaintRetentionChange(invalidateRetention)
     return () => {
       removeDownloadTracking()
-      removeAutomationTracking()
-      removeMobileTracking()
+      removePaintRetentionTracking()
     }
   }, [])
   // Browser-guest retention budget (#12137 follow-up): hidden worktrees keep
@@ -1275,20 +1280,10 @@ function Terminal(): React.JSX.Element | null {
           state.browserPagesByWorkspace,
           hasLiveBrowserGuest
         ),
-      // Why these vetoes: automation/mobile keeps a hidden guest painted for a
-      // remote controller mid-drive, and main cancels a page's active downloads
-      // when its guest unregisters (tab-close semantics). Terminal state never
-      // vetoes — eviction only destroys guests and leaves the surface (panes,
-      // watchers) alone.
+      // Why a shared veto: eviction destroys guests outright, so every reason a guest has to stay
+      // alive vetoes here. Terminal state never vetoes — the surface (panes, watchers) is untouched.
       isEvictable: (worktreeId) =>
-        !(state.browserTabsByWorktree[worktreeId] ?? []).some((tab) =>
-          browserTabVisibilityPageIds(tab).some(
-            (pageId) =>
-              isBrowserAutomationVisible(pageId) ||
-              isBrowserPageMobileDriven(pageId) ||
-              hasActiveBrowserPageDownload(pageId)
-          )
-        )
+        !browserTabsVetoGuestEviction(state.browserTabsByWorktree[worktreeId] ?? [])
     })
     for (const worktreeId of evictedWorktreeIds) {
       destroyWorktreeBrowserGuests(
@@ -1788,27 +1783,38 @@ function Terminal(): React.JSX.Element | null {
       // Why: re-read fresh state on confirm so a slow dialog answer doesn't act on a stale tab list.
       const performClose = (): void => {
         const latest = useAppStore.getState()
-        const runtimeEnvironmentId = getActiveWorktreeRuntimeEnvironmentId(owningWorktreeId)
-        if (
-          isWebRuntimeSessionActive(runtimeEnvironmentId) &&
-          browserWorkspaceHasRemoteOwner(latest, tabId, runtimeEnvironmentId)
-        ) {
-          void closeWebRuntimeSessionTab({
-            worktreeId: owningWorktreeId,
-            tabId,
-            environmentId: runtimeEnvironmentId,
-            reason: 'user'
-          })
+        const plan = closeBrowserWorkspaceTabOnHosts({
+          state: latest,
+          worktreeId: owningWorktreeId,
+          workspaceId: tabId,
+          visibleTabId: tabId,
+          focusedEnvironmentId: getRuntimeEnvironmentIdForWorktree(latest, owningWorktreeId)
+        })
+        if (!plan.closesLocally) {
+          if (plan.removesVisibleTab) {
+            const mirroredTab = (latest.unifiedTabsByWorktree[owningWorktreeId] ?? []).find(
+              (candidate) => candidate.contentType === 'browser' && candidate.entityId === tabId
+            )
+            if (mirroredTab) {
+              latest.closeUnifiedTab(mirroredTab.id)
+            }
+          }
           return
         }
+        const closeOptions = plan.localCloseReason ? { reason: plan.localCloseReason } : undefined
         const currentTabs = latest.browserTabsByWorktree[owningWorktreeId] ?? []
         if (currentTabs.length <= 1) {
           const hasUnifiedEntry = Object.values(latest.unifiedTabsByWorktree).some((tabs) =>
             tabs.some((tab) => tab.contentType === 'browser' && tab.entityId === tabId)
           )
-          closeBrowserTab(tabId)
+          closeBrowserTab(tabId, closeOptions)
           // closeBrowserTab announces the MRU target before guest teardown can trigger bridge fallback.
           destroyWorkspaceWebviews(latest.browserPagesByWorkspace, tabId)
+          // Why: the fallback below answers "the user emptied this worktree". Unwinding a create
+          // that never finished is not that, so it must leave the selection as the click found it.
+          if (plan.localCloseReason === 'cleanup') {
+            return
+          }
           if (!hasUnifiedEntry && latest.activeWorktreeId === owningWorktreeId) {
             const worktreeFile = latest.openFiles.find(
               (file) => file.worktreeId === owningWorktreeId
@@ -1828,7 +1834,7 @@ function Terminal(): React.JSX.Element | null {
           }
           return
         }
-        closeBrowserTab(tabId)
+        closeBrowserTab(tabId, closeOptions)
         // closeBrowserTab announces the MRU target before guest teardown can trigger bridge fallback.
         destroyWorkspaceWebviews(latest.browserPagesByWorkspace, tabId)
       }
@@ -1878,25 +1884,32 @@ function Terminal(): React.JSX.Element | null {
         if (unifiedTab?.isPinned) {
           continue
         }
-        const runtimeEnvironmentId = getActiveWorktreeRuntimeEnvironmentId(activeWorktreeId)
-        if (
-          isWebRuntimeSessionActive(runtimeEnvironmentId) &&
-          (unifiedTab?.contentType === 'terminal' ||
-            (unifiedTab?.contentType === 'browser' &&
-              browserWorkspaceHasRemoteOwner(state, unifiedTab.entityId, runtimeEnvironmentId)))
-        ) {
-          if (unifiedTab.contentType === 'terminal') {
-            // Why: paired-host bulk close must revoke renderer resume and hook authority, not just remove the host session tab.
-            // No running-process prompt: "Close Others" over N busy tabs would be a modal storm.
-            closeTerminalTab(unifiedTab.entityId, { skipRunningProcessConfirm: true })
-          } else {
-            void closeWebRuntimeSessionTab({
-              worktreeId: activeWorktreeId,
-              tabId: unifiedTab.id,
-              environmentId: runtimeEnvironmentId,
-              reason: 'user'
-            })
+        let browserCloseOptions: { reason: 'cleanup' } | undefined
+        if (unifiedTab?.contentType === 'browser') {
+          const plan = closeBrowserWorkspaceTabOnHosts({
+            state,
+            worktreeId: activeWorktreeId,
+            workspaceId: unifiedTab.entityId,
+            visibleTabId: unifiedTab.id,
+            focusedEnvironmentId: getActiveWorktreeRuntimeEnvironmentId(activeWorktreeId)
+          })
+          if (!plan.closesLocally) {
+            if (plan.removesVisibleTab) {
+              state.closeUnifiedTab(unifiedTab.id)
+            }
+            continue
           }
+          browserCloseOptions = plan.localCloseReason
+            ? { reason: plan.localCloseReason }
+            : undefined
+        }
+        if (
+          unifiedTab?.contentType === 'terminal' &&
+          isWebRuntimeSessionActive(getActiveWorktreeRuntimeEnvironmentId(activeWorktreeId))
+        ) {
+          // Why: paired-host bulk close must revoke renderer resume and hook authority, not just remove the host session tab.
+          // No running-process prompt: "Close Others" over N busy tabs would be a modal storm.
+          closeTerminalTab(unifiedTab.entityId, { skipRunningProcessConfirm: true })
           continue
         }
         if ((state.tabsByWorktree[activeWorktreeId] ?? []).some((tab) => tab.id === id)) {
@@ -1913,7 +1926,8 @@ function Terminal(): React.JSX.Element | null {
         } else if (
           (state.browserTabsByWorktree[activeWorktreeId] ?? []).some((tab) => tab.id === id)
         ) {
-          closeBrowserTab(id)
+          closeBrowserTab(id, browserCloseOptions)
+          // closeBrowserTab announces the MRU target before guest teardown can trigger bridge fallback.
           destroyWorkspaceWebviews(state.browserPagesByWorkspace, id)
         } else if (unifiedTab?.contentType === 'simulator') {
           // Why: simulator tabs live only in the unified-tab store, so the
@@ -2520,6 +2534,7 @@ function Terminal(): React.JSX.Element | null {
             onTogglePaneExpand={handleTogglePaneExpand}
             editorFiles={worktreeFiles}
             browserTabs={worktreeBrowserTabs}
+            clientHostedBrowserRows={worktreeClientHostedBrowserRows}
             activeFileId={activeFileId}
             activeBrowserTabId={activeBrowserTabId}
             activeSimulatorTabId={
@@ -2874,10 +2889,11 @@ const WorktreeSplitSurface = React.memo(function WorktreeSplitSurface({
   activationDeferredMountTabIds: ReadonlySet<string> | null
 }): React.JSX.Element {
   const browserPageIds = useWorktreeBrowserPageIds(worktreeId)
-  const hasAutomationVisibleBrowser = useBrowserAutomationVisibilityForAny(browserPageIds)
-  const hasMobileDrivenBrowser = useBrowserMobileDriverForAny(browserPageIds)
-  const shouldKeepPaintable =
-    shouldMeasureHiddenWorktree || hasAutomationVisibleBrowser || hasMobileDrivenBrowser
+  const needsBrowserGuestPaint = useBrowserGuestPaintRetention(browserPageIds)
+  const shouldKeepPaintable = shouldKeepHiddenWorktreeSurfacePaintable({
+    shouldMeasureHiddenWorktree,
+    needsBrowserGuestPaint
+  })
 
   return (
     <div
@@ -2913,12 +2929,11 @@ const WorktreeSplitSurface = React.memo(function WorktreeSplitSurface({
       <RetainedBrowserPaneOverlayLayer
         worktreeId={worktreeId}
         isWorktreeActive={isVisible}
-        mountEligible={
-          isVisible ||
-          backgroundMountTabIds === null ||
-          hasAutomationVisibleBrowser ||
-          hasMobileDrivenBrowser
-        }
+        mountEligible={shouldMountRetainedBrowserOverlay({
+          isWorktreeVisible: isVisible,
+          hasDeferredBackgroundMounts: backgroundMountTabIds !== null,
+          needsBrowserGuestPaint
+        })}
       />
       {isVisible || backgroundMountTabIds === null ? (
         <EmulatorPaneOverlayLayer worktreeId={worktreeId} isWorktreeActive={isVisible} />
