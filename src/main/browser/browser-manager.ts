@@ -28,6 +28,9 @@ import { clampGrabPayload } from './browser-grab-payload'
 import { captureSelectionScreenshot as captureGrabSelectionScreenshot } from './browser-grab-screenshot'
 import { BrowserGrabSessionController } from './browser-grab-session-controller'
 import { browserDownloadDestinationReservations } from './browser-download-destination'
+import type { BrowserClientDownloadRoute } from './browser-client-download-relay'
+import { routeBrowserClientDownload } from './browser-client-download-routing'
+import { resolveBrowserRouteGuestPopupOpener } from './browser-route-guest-popup-ownership'
 import { resolveRendererWebContents } from './browser-guest-renderer-target'
 import { setupGrabShortcutForwarding } from './browser-guest-grab-shortcuts'
 import { setupGuestContextMenu } from './browser-guest-context-menu'
@@ -40,6 +43,11 @@ import {
   buildBrowserClickedLinkRoutingScript,
   buildBrowserIframeClickedLinkRoutingScript
 } from './browser-clicked-link-routing'
+import {
+  createPageInitiatedTabBudget,
+  type PageInitiatedTabBudget
+} from './browser-page-initiated-tab-budget'
+import { isNewBrowserTabPopupIntent } from './browser-popup-new-tab-intent'
 import { cleanElectronUserAgent } from './browser-session-ua'
 import { getBrowserSessionUserAgentMode } from './browser-session-user-agent-mode'
 import { googleAuthUserAgent, isGoogleAuthUrl } from './browser-google-auth-ua'
@@ -200,6 +208,8 @@ type ActiveDownload = {
   item: Electron.DownloadItem
   savePath: string
   reservationKey: string | null
+  clientRoute: BrowserClientDownloadRoute | null
+  remoteDestination: BrowserDownloadFinishedEvent['remoteDestination']
   receivedBytes: number
   transientState: BrowserDownloadProgressEvent['state']
   terminalEvent: BrowserDownloadFinishedEvent | null
@@ -228,6 +238,8 @@ export class BrowserManager {
   // Why: reverse map gives O(1) guest→tab lookups on every mouse/load/permission/popup event.
   private readonly tabIdByWebContentsId = new Map<number, string>()
   private readonly popupOwnerContextByGuestId = new Map<number, PopupOwnerContext>()
+  // Why: keyed by the opener tree's root so named child popups can't each mint a fresh tab quota.
+  private readonly pageInitiatedTabBudgetByRootGuestId = new Map<number, PageInitiatedTabBudget>()
   // Why: guests are keyed by page id but renderer visibility by workspace id; bridge the mismatch to activate the right tab before capture.
   private readonly workspaceIdByPageId = new Map<string, string>()
   private readonly sessionProfileIdByPageId = new Map<string, string | null>()
@@ -369,6 +381,15 @@ export class BrowserManager {
     if (browserTabId) {
       return { browserTabId, rootGuestWebContentsId: guestWebContentsId }
     }
+    // Route popups live in an Orca-built window, so they never pass through did-create-window and
+    // have no inherited context; their owning page comes from the route popup registry instead.
+    const routeOpenerWebContentsId = resolveBrowserRouteGuestPopupOpener(guestWebContentsId)
+    if (routeOpenerWebContentsId !== null) {
+      const openerTabId = this.tabIdByWebContentsId.get(routeOpenerWebContentsId)
+      return openerTabId
+        ? { browserTabId: openerTabId, rootGuestWebContentsId: routeOpenerWebContentsId }
+        : null
+    }
     const inherited = this.popupOwnerContextByGuestId.get(guestWebContentsId)
     if (
       inherited &&
@@ -378,6 +399,16 @@ export class BrowserManager {
     }
     this.popupOwnerContextByGuestId.delete(guestWebContentsId)
     return null
+  }
+
+  /** Shared across the whole opener tree, so a chain of popups draws from one budget. */
+  private tryConsumePageInitiatedTab(rootGuestWebContentsId: number): boolean {
+    let budget = this.pageInitiatedTabBudgetByRootGuestId.get(rootGuestWebContentsId)
+    if (!budget) {
+      budget = createPageInitiatedTabBudget()
+      this.pageInitiatedTabBudgetByRootGuestId.set(rootGuestWebContentsId, budget)
+    }
+    return budget.tryConsume(Date.now())
   }
 
   private resolveRendererForBrowserTab(browserTabId: string): Electron.WebContents | null {
@@ -744,8 +775,9 @@ export class BrowserManager {
       this.attachGuestPolicies(window.webContents, this.resolvePopupOwnerContext(guest.id))
     }
     guest.on('did-create-window', handleDidCreateWindow)
-    guest.setWindowOpenHandler(({ url, frameName }) => {
-      const browserTabId = this.resolveBrowserTabIdForGuestWebContentsId(guest.id)
+    guest.setWindowOpenHandler(({ url, frameName, disposition, features }) => {
+      const ownerContext = this.resolvePopupOwnerContext(guest.id)
+      const browserTabId = ownerContext?.browserTabId ?? null
       const browserUrl = normalizeBrowserNavigationUrl(url)
       const externalUrl = normalizeExternalBrowserUrl(url)
       const expectedClickedLinkFrameName = this.clickedLinkFrameNameByGuestId.get(guest.id)
@@ -767,6 +799,33 @@ export class BrowserManager {
           })
         }
         // Why: a recognized gesture must never fall through to a native popup if its renderer vanished mid-click.
+        return { action: 'deny' }
+      }
+
+      // Why: an unnamed, featureless window.open() is Chromium's own new-tab shape, so an Orca tab is
+      // the honest presentation; a floating origin-bar window is not. Opener-dependent shapes are
+      // excluded by isNewBrowserTabPopupIntent and still get a real child window below.
+      if (
+        ownerContext &&
+        externalUrl &&
+        isNewBrowserTabPopupIntent({ frameName, disposition, features })
+      ) {
+        // Why: one activation lets a page loop window.open, and each routed tab persists into
+        // workspace session state, so it survives the quit that used to clear popup windows.
+        if (!this.tryConsumePageInitiatedTab(ownerContext.rootGuestWebContentsId)) {
+          this.forwardOrQueuePopupEvent(guest.id, {
+            origin: safeOrigin(externalUrl),
+            action: 'blocked'
+          })
+          return { action: 'deny' }
+        }
+        if (this.openLinkInOrcaTab(ownerContext.browserTabId, externalUrl)) {
+          this.forwardOrQueuePopupEvent(guest.id, {
+            origin: safeOrigin(externalUrl),
+            action: 'opened-in-orca'
+          })
+        }
+        // Why: a recognized new-tab intent must never fall through to a native popup if its renderer vanished mid-open.
         return { action: 'deny' }
       }
 
@@ -1173,6 +1232,14 @@ export class BrowserManager {
     )
   }
 
+  /** Route guests own their own popup handler, so their denials arrive here instead. */
+  reportRouteGuestPopupBlocked(input: { openerWebContentsId: number; url: string }): void {
+    this.forwardOrQueuePopupEvent(input.openerWebContentsId, {
+      origin: safeOrigin(input.url),
+      action: 'blocked'
+    })
+  }
+
   private createPopupChildWindowWithOriginBar(
     openerGuest: Electron.WebContents,
     targetUrl: string,
@@ -1221,6 +1288,7 @@ export class BrowserManager {
     this.clickedLinkFrameNameByGuestId.delete(guestWebContentsId)
     this.offscreenGuestIds.delete(guestWebContentsId)
     this.popupOwnerContextByGuestId.delete(guestWebContentsId)
+    this.pageInitiatedTabBudgetByRootGuestId.delete(guestWebContentsId)
     this.authUserAgentOverrideStateByGuestId.delete(guestWebContentsId)
     this.pendingNavigationByGuestId.delete(guestWebContentsId)
     // Why: a popup must stop inheriting authorization the moment its owner retires, before Chromium destroys the child.
@@ -1422,6 +1490,7 @@ export class BrowserManager {
     this.clickedLinkFrameNameByGuestId.clear()
     this.tabIdByWebContentsId.clear()
     this.popupOwnerContextByGuestId.clear()
+    this.pageInitiatedTabBudgetByRootGuestId.clear()
     this.worktreeIdByTabId.clear()
     this.sessionProfileIdByPageId.clear()
     this.userAgentModeByPageId.clear()
@@ -1593,7 +1662,27 @@ export class BrowserManager {
       }
     })()
 
+    // Why: a client-hosted page's bytes belong on the remote workspace, so main stages them itself
+    // instead of reserving a name in the desktop Downloads folder. A popup downloads to its
+    // opener's page: the popup itself is a client-local transient with no logical page of its own.
+    const ownerContext = this.resolvePopupOwnerContext(guestWebContentsId)
+    const decision = routeBrowserClientDownload({
+      guestWebContentsId: ownerContext?.rootGuestWebContentsId ?? guestWebContentsId
+    })
+    const clientRoute = decision.kind === 'remote' ? decision.route : null
     const destination = (() => {
+      if (clientRoute) {
+        return {
+          filename: requestedFilename,
+          savePath: clientRoute.stagingPath,
+          reservationKey: null
+        }
+      }
+      // Why: a client-hosted download with no resolvable remote destination is canceled rather than
+      // written to this desktop's Downloads folder.
+      if (decision.kind === 'blocked') {
+        return null
+      }
       try {
         return browserDownloadDestinationReservations.reserve(requestedFilename)
       } catch (error) {
@@ -1616,6 +1705,8 @@ export class BrowserManager {
       item,
       savePath: fallbackSavePath,
       reservationKey: destination?.reservationKey ?? null,
+      clientRoute,
+      remoteDestination: undefined,
       receivedBytes: 0,
       transientState: null,
       terminalEvent: null,
@@ -1624,7 +1715,7 @@ export class BrowserManager {
     }
     this.downloadsById.set(downloadId, download)
 
-    const browserTabId = this.resolveBrowserTabIdForGuestWebContentsId(guestWebContentsId)
+    const browserTabId = ownerContext?.browserTabId ?? null
     if (browserTabId) {
       this.bindDownloadToTab(downloadId, browserTabId)
     } else {
@@ -1634,7 +1725,13 @@ export class BrowserManager {
     }
 
     if (!destination) {
-      this.finishDownloadInternal(downloadId, 'failed', 'Could not choose a Downloads file name.')
+      this.finishDownloadInternal(
+        downloadId,
+        'failed',
+        decision.kind === 'blocked'
+          ? 'Could not save the download to the remote workspace.'
+          : 'Could not choose a Downloads file name.'
+      )
       try {
         item.cancel()
       } catch {
@@ -1670,15 +1767,17 @@ export class BrowserManager {
     const doneHandler = (_event: Electron.Event, state: BrowserDownloadDoneState): void => {
       const status: BrowserDownloadFinishedEvent['status'] =
         state === 'completed' ? 'completed' : state === 'cancelled' ? 'canceled' : 'failed'
-      this.finishDownloadInternal(
-        download.downloadId,
-        status,
+      const failure =
         status === 'failed'
           ? state === 'interrupted'
             ? 'Download was interrupted.'
             : 'Download failed.'
           : null
-      )
+      if (download.clientRoute) {
+        void this.settleClientHostedDownload(download, status, failure)
+        return
+      }
+      this.finishDownloadInternal(download.downloadId, status, failure)
     }
     download.cleanup = (): void => {
       try {
@@ -2235,6 +2334,45 @@ export class BrowserManager {
     renderer.send('browser:download-finished', payload)
   }
 
+  private async settleClientHostedDownload(
+    download: ActiveDownload,
+    status: BrowserDownloadFinishedEvent['status'],
+    failure: string | null
+  ): Promise<void> {
+    const route = download.clientRoute
+    if (!route) {
+      return
+    }
+    if (status !== 'completed') {
+      download.clientRoute = null
+      await route.abort().catch(() => undefined)
+      this.finishDownloadInternal(download.downloadId, status, failure)
+      return
+    }
+    try {
+      // Why: the route stays on the record for the whole commit, which spans many round trips -- a
+      // cancel arriving mid-stream has to find something to abort or the bytes land anyway.
+      const remoteDestination = await route.complete(download.filename)
+      download.clientRoute = null
+      download.remoteDestination = remoteDestination
+      // Why: the staged copy is deleted, so a client save path would name a file that no longer exists.
+      download.savePath = ''
+      this.finishDownloadInternal(download.downloadId, 'completed', null)
+    } catch (error) {
+      download.clientRoute = null
+      if (download.terminalEvent) {
+        // A cancel already reported the outcome; this rejection is that cancel taking effect.
+        return
+      }
+      console.error('[browser-download] Failed to save download to the remote workspace:', error)
+      this.finishDownloadInternal(
+        download.downloadId,
+        'failed',
+        'Could not save the download to the remote workspace.'
+      )
+    }
+  }
+
   private cancelDownloadInternal(downloadId: string, reason: string): void {
     const download = this.downloadsById.get(downloadId)
     if (!download) {
@@ -2277,11 +2415,17 @@ export class BrowserManager {
     }
     browserDownloadDestinationReservations.release(download.reservationKey)
     download.reservationKey = null
+    if (download.clientRoute) {
+      // Why: a cancel path can reach here before the relay settled; the staged copy must not survive.
+      void download.clientRoute.abort().catch(() => undefined)
+      download.clientRoute = null
+    }
     const event: BrowserDownloadFinishedEvent = {
       browserPageId: download.browserTabId ?? undefined,
       downloadId: download.downloadId,
       status,
       savePath: download.savePath || null,
+      ...(download.remoteDestination ? { remoteDestination: download.remoteDestination } : {}),
       error
     }
     download.terminalEvent = event
