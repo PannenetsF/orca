@@ -46,7 +46,8 @@ export type ActivateAndRevealResult = {
 
 function ensureFolderWorkspaceInitialTerminal(
   folderWorkspace: FolderWorkspace,
-  startup?: WorktreeStartupPayload
+  startup?: WorktreeStartupPayload,
+  providesInitialSurface?: boolean
 ): string | null {
   const state = useAppStore.getState()
   const workspaceKey = folderWorkspaceKey(folderWorkspace.id)
@@ -56,7 +57,8 @@ function ensureFolderWorkspaceInitialTerminal(
     startup,
     undefined,
     undefined,
-    undefined
+    undefined,
+    { reseedEmptiedWorkspace: providesInitialSurface !== true }
   )
   return primaryTabId
 }
@@ -68,6 +70,8 @@ export function activateAndRevealFolderWorkspace(
     startup?: WorktreeStartupPayload
     runtimeEnvironmentId?: string | null
     executionHostId?: ExecutionHostId
+    /** See activateAndRevealWorktree — same contract for folder workspaces. */
+    providesInitialSurface?: boolean
   }
 ): ActivateAndRevealResult | false {
   const state = useAppStore.getState()
@@ -118,7 +122,11 @@ export function activateAndRevealFolderWorkspace(
     state.recordWorktreeVisit(workspaceKey)
   }
   resumeSleepingAgentSessionsForWorktree(workspaceKey)
-  const primaryTabId = ensureFolderWorkspaceInitialTerminal(folderWorkspace, opts?.startup)
+  const primaryTabId = ensureFolderWorkspaceInitialTerminal(
+    folderWorkspace,
+    opts?.startup,
+    opts?.providesInitialSurface
+  )
 
   if (opts?.sidebarRevealBehavior) {
     state.revealWorktreeInSidebar(workspaceKey, { behavior: opts.sidebarRevealBehavior })
@@ -142,6 +150,12 @@ export function activateAndRevealWorktree(
     revealInSidebar?: boolean
     executionHostId?: ExecutionHostId
     backendStartupTerminalSpawned?: boolean
+    /** Set by callers that navigate here only to open their own non-terminal surface
+     *  (an editor file, a diff). Activation then leaves a closed-last-terminal workspace
+     *  empty instead of adding a shell the user never asked for. Caveat: on a
+     *  runtime-owned workspace with a live web session the host owns terminal creation,
+     *  so ensureWebRuntimeWorktreeTerminalAfterWake may still seed one (matches main). */
+    providesInitialSurface?: boolean
   }
 ): ActivateAndRevealResult | false {
   const state = useAppStore.getState()
@@ -193,6 +207,8 @@ export function activateAndRevealWorktree(
   }
 
   // Why: sleeping destroys the local PTY but preserves the provider session id, so waking should restore those CLI sessions automatically.
+  // Ordering is load-bearing: resuming synchronously creates the session's tab first, so the
+  // seeding below sees a renderable surface and doesn't add a bare shell next to it.
   resumeSleepingAgentSessionsForWorktree(worktreeId)
 
   // 4. Ensure a focusable surface exists for externally-created worktrees
@@ -203,7 +219,10 @@ export function activateAndRevealWorktree(
     opts?.setup,
     opts?.issueCommand,
     opts?.defaultTabs,
-    opts?.backendStartupTerminalSpawned ? { backendStartupTerminalSpawned: true } : undefined
+    {
+      ...(opts?.backendStartupTerminalSpawned ? { backendStartupTerminalSpawned: true } : {}),
+      reseedEmptiedWorkspace: opts?.providesInitialSurface !== true
+    }
   )
   if (primaryTabId && opts?.initialCwd) {
     useAppStore.getState().queueTabInitialCwd(primaryTabId, opts.initialCwd)
@@ -259,7 +278,7 @@ export function activateAndRevealWorktree(
  */
 export function activateAndRevealWorkspace(
   workspaceId: string,
-  opts?: { executionHostId?: ExecutionHostId }
+  opts?: { executionHostId?: ExecutionHostId; providesInitialSurface?: boolean }
 ): ActivateAndRevealResult | false {
   const workspaceScope = parseWorkspaceKey(workspaceId)
   if (workspaceScope?.type === 'folder') {
