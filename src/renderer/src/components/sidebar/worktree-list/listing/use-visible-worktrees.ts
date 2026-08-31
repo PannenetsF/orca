@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useAppStore } from '@/store'
+import { getAgentStatusEpochNow } from '@/lib/agent-status-epoch-clock'
 import { getWorktreeIdsWithLiveAgent } from '@/lib/worktree-activity-state'
 import type { AppState } from '@/store/types'
 import type { Repo } from '../../../../../../shared/repo-types'
@@ -48,6 +49,9 @@ export function useVisibleSidebarWorktrees(args: {
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const agentStatusEpoch = useAppStore((s) => (!showSleepingWorkspaces ? s.agentStatusEpoch : 0))
+  // Why: skip the clock entirely when the epoch is the opt-out sentinel, so a
+  // sleeping-workspaces list cannot evict the sample the live lists share.
+  const agentStatusNow = showSleepingWorkspaces ? 0 : getAgentStatusEpochNow(agentStatusEpoch)
   const runtimeEnvironments = useAppStore((s) => s.runtimeEnvironments)
   const runtimeStatusByEnvironmentId = useAppStore((s) => s.runtimeStatusByEnvironmentId)
   const pairedDeviceIdsByEnvironment = useMemo(
@@ -69,6 +73,8 @@ export function useVisibleSidebarWorktrees(args: {
   )
 
   const recomputedVisibleWorktrees = useMemo(() => {
+    // Keyed on the epoch, not `agentStatusNow`: two bumps in one millisecond
+    // share a sample, so the timestamp alone would not re-key this memo.
     void agentStatusEpoch
     return computeVisibleWorktrees(worktreesByRepo, sortedIds, {
       filterRepoIds,
@@ -84,7 +90,7 @@ export function useVisibleSidebarWorktrees(args: {
         : getWorktreeIdsWithLiveAgent(
             useAppStore.getState().agentStatusByPaneKey,
             tabsByWorktree,
-            Date.now()
+            agentStatusNow
           ),
       hideDefaultBranchWorkspace,
       hideAutomationGeneratedWorkspaces,
@@ -105,6 +111,7 @@ export function useVisibleSidebarWorktrees(args: {
   }, [
     args.agentSendTargetWorktreeId,
     agentStatusEpoch,
+    agentStatusNow,
     filterRepoIds,
     filterWorkspaceStatuses,
     workspaceStatuses,
