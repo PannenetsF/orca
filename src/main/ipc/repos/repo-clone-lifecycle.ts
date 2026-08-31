@@ -146,6 +146,7 @@ export function registerRepoCloneHandlers(mainWindow: BrowserWindow, store: Stor
             ['clone', '--progress', '--', args.url, clonePath],
             {
               cwd: args.destination,
+              admissionTier: 'interactive',
               // Why: without this, an auth-needing clone pops Git Credential Manager's OAuth window on Windows, unclosable in a restricted env (issue #7652).
               // Why: honor the app's configured proxy so clones route through it like other Orca network children.
               env: gitCloneEnvWithProxy(nonInteractiveGitEnv(), store.getSettings()),
