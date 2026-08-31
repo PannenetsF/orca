@@ -14,9 +14,10 @@ const mocks = vi.hoisted(() => ({
   onSnapshotRequested: vi.fn(),
   getPopoutOpen: vi.fn(async () => false),
   publishSnapshot: vi.fn(async (_snapshot: DashboardSnapshot) => undefined),
-  buildDashboardSnapshot: vi.fn(
-    (_state: unknown, now: number): DashboardSnapshot => ({ generatedAt: now, cards: [] })
-  ),
+  buildDashboardSnapshot: vi.fn((_state: unknown, now: number): DashboardSnapshot => ({
+    generatedAt: now,
+    cards: []
+  })),
   activateAndRevealWorktree: vi.fn(),
   activateTabAndFocusPane: vi.fn(),
   offRevealAgent: vi.fn(),
@@ -176,7 +177,12 @@ describe('useDashboardPopoutBridge', () => {
       })
     )
 
-    expect(mocks.setActiveWorktree).toHaveBeenCalledWith('shared-worktree', 'runtime:env-1')
+    // Why: reveal routes through activateAndRevealWorktree (which forwards the
+    // host to setActiveWorktree) so remote panes mount on the right runtime.
+    expect(mocks.activateAndRevealWorktree).toHaveBeenCalledWith('shared-worktree', {
+      revealInSidebar: false,
+      executionHostId: 'runtime:env-1'
+    })
   })
 
   it('ignores unrelated store writes while retaining every snapshot input', () => {
