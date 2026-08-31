@@ -9,7 +9,8 @@ import {
   RUNTIME_PROTOCOL_VERSION,
   WORKSPACE_RUN_CONTEXT_RUNTIME_CAPABILITY
 } from '../../../../shared/protocol-version'
-import type { Project, ProjectHostSetup, Repo } from '../../../../shared/types'
+import type { Project, ProjectHostSetup } from '../../../../shared/project-types'
+import type { Repo } from '../../../../shared/repo-types'
 import { useAppStore } from '../../store'
 import { RepositoryHostSetupsSection } from './RepositoryHostSetupsSection'
 
@@ -51,6 +52,15 @@ function makeSetup(
     createdAt: 100,
     updatedAt: 100,
     ...overrides
+  }
+}
+
+function connectedSshState(targetId: string) {
+  return {
+    targetId,
+    status: 'connected' as const,
+    error: null,
+    reconnectAttempt: 0
   }
 }
 
@@ -283,6 +293,7 @@ describe('RepositoryHostSetupsSection', () => {
                 }
               ]
             ]),
+            targetGenerations: new Map(),
             targetLabels: new Map([
               ['direct', 'Direct box'],
               ['jump', 'Jump box']
@@ -437,6 +448,7 @@ describe('RepositoryHostSetupsSection', () => {
         })
       ],
       sshTargetLabels: new Map([['openclaw 2', 'openclaw 2']]),
+      sshConnectionStates: new Map([['openclaw 2', connectedSshState('openclaw 2')]]),
       openSettingsPage,
       openSettingsTarget,
       setSettingsProjectHostSelection,
@@ -513,6 +525,7 @@ describe('RepositoryHostSetupsSection', () => {
         })
       ],
       sshTargetLabels: new Map([['openclaw 2', 'openclaw 2']]),
+      sshConnectionStates: new Map([['openclaw 2', connectedSshState('openclaw 2')]]),
       openSettingsPage,
       openSettingsTarget,
       setSettingsProjectHostSelection,
@@ -554,6 +567,45 @@ describe('RepositoryHostSetupsSection', () => {
     )
     expect(openSettingsPage).not.toHaveBeenCalled()
     expect(openSettingsTarget).not.toHaveBeenCalled()
+  })
+
+  it('blocks path setup until an SSH host connects but keeps placeholders available', () => {
+    const localRepo = makeRepo({
+      id: 'local-repo',
+      displayName: 'Orca',
+      path: '/Users/alice/orca'
+    })
+    useAppStore.setState({
+      repos: [localRepo],
+      projects: [makeProject({ id: 'github:stablyai/orca' })],
+      projectHostSetups: [
+        makeSetup({
+          id: 'local-repo',
+          projectId: 'github:stablyai/orca',
+          repoId: 'local-repo',
+          hostId: 'local',
+          path: '/Users/alice/orca'
+        })
+      ],
+      sshTargetLabels: new Map([['openclaw 2', 'openclaw 2']])
+    })
+
+    renderSection(localRepo)
+    clickButton('Add to another host')
+
+    expect(container.textContent).toContain(
+      'Connect this host before importing or cloning the project'
+    )
+    expect(findButton('Browse folder')?.disabled).toBe(true)
+    expect(findButton('Clone from URL')?.disabled).toBe(true)
+    expect(findButton('Add host placeholder')?.disabled).toBe(false)
+
+    act(() => {
+      useAppStore.getState().setSshConnectionState('openclaw 2', connectedSshState('openclaw 2'))
+    })
+
+    expect(findButton('Browse folder')?.disabled).toBe(false)
+    expect(findButton('Clone from URL')?.disabled).toBe(false)
   })
 
   it('creates pending setup metadata for a known host without requiring a path', async () => {

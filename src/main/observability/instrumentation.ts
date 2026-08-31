@@ -21,7 +21,7 @@
 // itself becomes a `noopSpan` that swallows all calls — call sites do not
 // need to branch on whether tracing is on.
 
-import { withSpan, type ActiveSpan } from './tracer'
+import { startSpan, withSpan, type ActiveSpan } from './tracer'
 
 const GIT_FAST_SUCCESS_THRESHOLD_MS = 250
 const GIT_FAST_SUCCESS_WINDOW_MS = 60_000
@@ -173,15 +173,28 @@ export type GitSpanArgs = {
 /** Wrap a git execution in a `git.exec` span. Git accepts global options before
  *  the subcommand; promoting the parsed command to its own attribute makes it
  *  grep-friendly without copying the full args array into dashboards. */
-export async function withGitSpan<T>(meta: GitSpanArgs, fn: () => Promise<T>): Promise<T> {
+export async function withGitSpan<T>(
+  meta: GitSpanArgs,
+  fn: (span: ActiveSpan) => Promise<T>
+): Promise<T> {
   return withSpan(
     'git.exec',
     async (span) => {
       addGitAttributes(span, meta)
-      return await fn()
+      return await fn(span)
     },
     { attributes: { kind: 'git' }, shouldRecord: (record) => shouldRecordGitSpan(meta, record) }
   )
+}
+
+/** Start a git span whose lifetime follows a returned ChildProcess. */
+export function startGitSpan(meta: GitSpanArgs): ActiveSpan {
+  const span = startSpan('git.exec', {
+    attributes: { kind: 'git' },
+    shouldRecord: (record) => shouldRecordGitSpan(meta, record)
+  })
+  addGitAttributes(span, meta)
+  return span
 }
 
 export type WorktreeSpanArgs = {
@@ -207,30 +220,26 @@ export async function withWorktreeSpan<T>(
   )
 }
 
-export type PtySpanArgs = {
-  readonly stage: 'spawn' | 'exit' | 'recover'
-  readonly shell?: string
-  readonly cwd?: string
-}
+/** Closed set so a typo can't silently mint an orphan span name. */
+export type WorktreeRemoveStage =
+  | 'archive_hook'
+  | 'cache_invalidation'
+  | 'git_remove'
+  | 'metadata_purge'
+  | 'pty_sweep'
+  | 'trash_rename'
+  | 'watcher_gate'
 
-/** Wrap a PTY-lifecycle event in a `pty.<stage>` span. The lifecycle is
- *  long-lived; callers typically use `startSpan` directly for the live
- *  session and call `withPtySpan` only for the spawn/exit moments. */
-export async function withPtySpan<T>(meta: PtySpanArgs, fn: () => Promise<T> | T): Promise<T> {
-  return withSpan(
-    `pty.${meta.stage}`,
-    async (span) => {
-      span.setAttribute('pty.stage', meta.stage)
-      if (meta.shell) {
-        span.setAttribute('pty.shell', meta.shell)
-      }
-      if (meta.cwd) {
-        span.setAttribute('cwd', meta.cwd)
-      }
-      return await fn()
-    },
-    { attributes: { kind: 'pty' } }
-  )
+/** Wrap one stage of a worktree removal. Children share the parent's `kind` so `kind`-filtered
+ *  views keep the whole tree, and `worktree.flow` separates the folder/remote/local removal paths. */
+export async function withWorktreeRemoveStageSpan<T>(
+  stage: WorktreeRemoveStage,
+  flow: 'folder' | 'remote' | 'local',
+  fn: () => Promise<T>
+): Promise<T> {
+  return withSpan(`worktree.remove.${stage}`, fn, {
+    attributes: { kind: 'worktree', 'worktree.flow': flow }
+  })
 }
 
 export type UpdaterSpanArgs = {

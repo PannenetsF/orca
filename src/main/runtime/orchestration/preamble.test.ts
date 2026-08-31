@@ -45,9 +45,12 @@ describe('buildDispatchPreamble', () => {
     expect(result).toContain('reportPath')
     expect(result).toContain('--task-id task_abc123')
     expect(result).toContain('--dispatch-id ctx_def456')
+    expect(result).toContain('--outcome succeeded')
+    expect(result).toContain('replace it with --outcome failed')
     expect(result).toContain('--files-modified "path/a,path/b"')
     expect(result).toContain('--report-path "<optional: path to the full artifact>"')
-    expect(result).toMatch(/orchestration send --to term_coord --from term_worker/)
+    expect(result).toMatch(/orchestration send --from term_worker/)
+    expect(result).not.toContain('orchestration send --to term_coord')
   })
 
   it(
@@ -85,14 +88,15 @@ describe('buildDispatchPreamble', () => {
     expect(result).toContain('--task-id task_abc123')
     expect(result).toContain('--dispatch-id ctx_def456')
     expect(result).toContain('--phase "<short: investigating|implementing|reviewing|waiting>"')
-    expect(result).toMatch(/orchestration send --to term_coord --from term_worker/)
+    expect(result).toMatch(/orchestration send --from term_worker/)
   })
 
   it('includes ask block with BEHAVIOR RULE #1 forbidding AskUserQuestion', () => {
     const result = buildDispatchPreamble(baseParams())
-    expect(result).toMatch(/orchestration ask --to term_coord --from term_worker/)
+    expect(result).toMatch(/orchestration ask --from term_worker/)
     expect(result).toContain('--question')
     expect(result).toContain('--timeout-ms 600000')
+    expect(result).not.toContain('--type decision_gate')
     // Why: the exact phrase is asserted so the rule can't be trimmed away by
     // accident. BEHAVIOR RULE #1 is the only place AskUserQuestion appears.
     expect(result).toContain('BEHAVIOR RULE #1')
@@ -101,22 +105,29 @@ describe('buildDispatchPreamble', () => {
     // else (e.g., not in an example payload or header). Count occurrences
     // of the exact token as a sanity check.
     const occurrences = (result.match(/AskUserQuestion/g) ?? []).length
-    // Three mentions: the one-liner ban, the TUI-prompt rationale, and the
-    // "when tempted to reach for AskUserQuestion" closing line.
-    expect(occurrences).toBe(3)
+    expect(occurrences).toBe(2)
   })
 
   it('binds every injected worker command to the dispatched terminal', () => {
     const result = buildDispatchPreamble(baseParams())
 
-    expect(result).toMatch(/orchestration ask --to term_coord --from term_worker/)
-    expect(result).toMatch(
-      /orchestration send --to term_coord --from term_worker \\\n    --type escalation/
-    )
+    expect(result).toMatch(/orchestration ask --from term_worker/)
+    expect(result).toMatch(/orchestration send --from term_worker \\\n    --type escalation/)
+    expect(result).toContain('--task-id task_abc123 --dispatch-id ctx_def456')
     expect(result).toContain('orchestration check --terminal term_worker')
   })
 
-  it('tells prompt-returning workers to idle without post-done polling', () => {
+  it('carries the minted Dispatch capability on lifecycle and question commands', () => {
+    const result = buildDispatchPreamble({
+      ...baseParams(),
+      dispatchCapability: 'dcap_test_secret'
+    })
+
+    expect(result.match(/--dispatch-capability dcap_test_secret/g)).toHaveLength(4)
+    expect(result).not.toContain('"dispatchCapability"')
+  })
+
+  it('idles prompt-returning workers while preserving direct user authority', () => {
     const result = buildDispatchPreamble(baseParams())
     const section = afterWorkerDoneSection(result)
 
@@ -126,6 +137,12 @@ describe('buildDispatchPreamble', () => {
     expect(section).toContain('Do not exit the shell')
     expect(section).toContain('do NOT run a sleep/poll loop')
     expect(section).toContain('do NOT keep calling')
+    expect(section).toContain('A direct instruction from the user takes precedence')
+    expect(section).toMatch(/follow it without coordinator approval or a\s+fresh Dispatch/)
+    expect(section).toMatch(
+      /do not send lifecycle messages using the settled task or\s+Dispatch IDs/
+    )
+    expect(section).toContain('Never refuse a direct user request because you were a worker')
     expect(section).toMatch(/fresh\s+preamble \+ TASK block/)
     expect(section).not.toMatch(/2 minutes/)
     expect(section).not.toMatch(/10 minutes/)
@@ -271,5 +288,39 @@ describe('buildDispatchPreamble', () => {
       workerHandle: 'term_WORKER'
     })
     expect(result).toMatchSnapshot()
+  })
+})
+
+describe('sub-dispatch section', () => {
+  const base = {
+    taskId: 'task_1',
+    dispatchId: 'ctx_1',
+    taskSpec: 'do the thing',
+    coordinatorHandle: 'term_coord',
+    workerHandle: 'term_worker'
+  }
+
+  it('is omitted when the worker has no nesting budget', () => {
+    const preamble = buildDispatchPreamble(base)
+    expect(preamble).not.toContain('=== SUB-DISPATCH ===')
+    expect(preamble).not.toContain('worker-start')
+  })
+
+  it('is omitted explicitly when nesting is disallowed', () => {
+    expect(buildDispatchPreamble({ ...base, canDispatchSubWorkers: false })).not.toContain(
+      '=== SUB-DISPATCH ==='
+    )
+  })
+
+  it('appears with the run-create sequence when budget remains', () => {
+    const preamble = buildDispatchPreamble({ ...base, canDispatchSubWorkers: true })
+    expect(preamble).toContain('=== SUB-DISPATCH ===')
+    expect(preamble).toContain('orchestration run-create')
+    expect(preamble).toContain('orchestration worker-start')
+  })
+
+  it('keeps the task block last so the spec is not buried', () => {
+    const preamble = buildDispatchPreamble({ ...base, canDispatchSubWorkers: true })
+    expect(preamble.indexOf('=== SUB-DISPATCH ===')).toBeLessThan(preamble.indexOf('=== TASK ==='))
   })
 })

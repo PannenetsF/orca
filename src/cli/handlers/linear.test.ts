@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const callMock = vi.fn()
 
-vi.mock('../runtime-client', () => {
+vi.mock('../runtime-client', async () => {
   class RuntimeClient {
     readonly isRemote: boolean
     call = callMock
@@ -19,23 +19,10 @@ vi.mock('../runtime-client', () => {
     }
   }
 
-  class RuntimeClientError extends Error {
-    readonly code: string
-
-    constructor(code: string, message: string) {
-      super(message)
-      this.code = code
-    }
-  }
-
-  class RuntimeRpcFailureError extends RuntimeClientError {
-    readonly response: unknown
-
-    constructor(response: unknown) {
-      super('runtime_error', 'runtime_error')
-      this.response = response
-    }
-  }
+  // Why: re-export the REAL error classes; format.ts narrows with `instanceof`
+  // against ./runtime/types, so a look-alike would collapse every CLI error
+  // code into the generic `runtime_error` shape.
+  const { RuntimeClientError, RuntimeRpcFailureError } = await import('../runtime/types.js')
 
   return {
     RuntimeClient,
@@ -128,6 +115,46 @@ describe('orca linear CLI handlers', () => {
         includeArchived: true
       })
     )
+  })
+
+  it('prints truncation on human stdout and in JSON without using stderr for JSON', async () => {
+    const listResult = {
+      issues: [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-1',
+          title: 'Fix auth',
+          url: 'https://linear.app/acme/issue/ENG-1',
+          labels: [],
+          workspace: { id: 'workspace-1', name: 'Acme' }
+        }
+      ],
+      truncated: true,
+      meta: {
+        limit: 1,
+        returned: 1,
+        hasMore: true,
+        nextCursor: 'next-page',
+        orderBy: 'updatedAt',
+        workspaceId: 'workspace-1',
+        partial: false,
+        workspaceErrors: []
+      }
+    }
+    queueFixtures(callMock, okFixture('req_list', listResult))
+    await main(['linear', 'list-issues', '--limit', '1'], '/tmp/repo')
+    expect(vi.mocked(console.log).mock.calls[0][0]).toContain('truncated: showing 1')
+    expect(
+      vi.mocked(console.error).mock.calls.some((call) => String(call[0]).includes('more results'))
+    ).toBe(true)
+
+    vi.mocked(console.log).mockClear()
+    vi.mocked(console.error).mockClear()
+    queueFixtures(callMock, okFixture('req_list_json', listResult))
+    await main(['linear', 'list-issues', '--limit', '1', '--json'], '/tmp/repo')
+    const jsonOut = String(vi.mocked(console.log).mock.calls[0][0])
+    expect(jsonOut).toContain('"truncated": true')
+    expect(vi.mocked(console.error)).not.toHaveBeenCalled()
   })
 
   it('keeps global boolean flags before Linear commands from consuming command tokens', async () => {

@@ -4,7 +4,7 @@ import type { PiAgentKind } from '../../shared/pi-agent-kind'
 // both are independently sizeable and the installed extension concatenates them.
 export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] {
   const sessionStartHandler =
-    kind === 'pi'
+    kind !== 'omp'
       ? [
           "  pi.on('session_start', (event, ctx) => {",
           '    updateSessionMetadata(ctx)',
@@ -21,6 +21,42 @@ export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] 
   const ctxParam = ', ctx'
   const bareCtxParams = '_event, ctx'
   const captureSessionMetadata = ['    updateRuntimeOmpSessionMetadata(ctx)']
+  const primeDaemonWorkerGuard =
+    kind === 'prime-agent'
+      ? [
+          '  // Why: Prime loads extensions in both its frontend and event-emitting daemon worker.',
+          '  if (!process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER) return'
+        ]
+      : []
+  const ownerEnv = kind === 'prime-agent' ? 'ORCA_PRIME_AGENT_STATUS_OWNED' : 'ORCA_PI_STATUS_OWNED'
+
+  // Why: OMP suppresses its approval lifecycle unless an extension listens for it,
+  // and it is the only signal that the run is parked on a permission prompt rather
+  // than still working. Prime has no OMP runtime, so the handlers would be dead there.
+  const approvalHandlers =
+    kind === 'prime-agent'
+      ? []
+      : [
+          `  pi.on('tool_approval_requested', (event${ctxParam}) => {`,
+          ...captureSessionMetadata,
+          '    if (!isOmpRuntime()) return',
+          "    post('tool_approval_requested', {",
+          '      tool_name: event.toolName,',
+          '      reason: event.reason,',
+          '      approval_mode: event.approvalMode,',
+          '    })',
+          '  })',
+          '',
+          `  pi.on('tool_approval_resolved', (event${ctxParam}) => {`,
+          ...captureSessionMetadata,
+          '    if (!isOmpRuntime()) return',
+          "    post('tool_approval_resolved', {",
+          '      tool_name: event.toolName,',
+          '      approved: event.approved,',
+          '    })',
+          '  })',
+          ''
+        ]
 
   return [
     '// Why: pi assistant messages carry content as an array of parts',
@@ -53,10 +89,11 @@ export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] 
     "// Why: child agents inherit the lead's pane env; only its process may",
     '// register status hooks. PID identity keeps in-process reloads reporting.',
     'export default function (pi): void {',
-    '  const ownerPid = process.env.ORCA_PI_STATUS_OWNED',
+    ...primeDaemonWorkerGuard,
+    `  const ownerPid = process.env.${ownerEnv}`,
     '  const selfPid = String(process.pid)',
     '  if (ownerPid && ownerPid !== selfPid) return',
-    '  process.env.ORCA_PI_STATUS_OWNED = selfPid',
+    `  process.env.${ownerEnv} = selfPid`,
     ...sessionStartHandler,
     `  pi.on('before_agent_start', (event${ctxParam}) => {`,
     ...captureSessionMetadata,
@@ -93,6 +130,7 @@ export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] 
     '    })',
     '  })',
     '',
+    ...approvalHandlers,
     "  // Why: capture the assistant's final text on each completed message",
     '  // so the dashboard preview reflects the most recent reply even before',
     '  // agent_end fires. message_end is the right hook because pi guarantees',
@@ -106,7 +144,9 @@ export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] 
     '  })',
     '',
     '  // Why: modern Pi stays non-idle across retry/compaction/follow-up work,',
-    '  // while legacy Pi/OMP becomes idle after its final agent_end handlers.',
+    '  // while legacy Pi becomes idle after its final agent_end handlers.',
+    '  // OMP instead marks non-terminal agent_end events with willContinue, so it',
+    '  // returns before the recheck timer is ever armed.',
     '  const AGENT_END_IDLE_RECHECK_MS = 25',
     '  const AGENT_END_IDLE_RECHECK_MAX_MS = 250',
     '  let agentSettledSupported = false',
@@ -158,8 +198,16 @@ export function getPiAgentStatusHandlerSourceLines(kind: PiAgentKind): string[] 
     '    postAgentEndOnce()',
     '  })',
     '',
-    "  pi.on('agent_end', (_event, ctx) => {",
+    "  pi.on('agent_end', (event, ctx) => {",
     ...captureSessionMetadata,
+    '    if (event?.willContinue === true) {',
+    '      clearPendingAgentEndCheck()',
+    '      return',
+    '    }',
+    '    if (isOmpRuntime()) {',
+    '      postAgentEndOnce()',
+    '      return',
+    '    }',
     '    if (agentSettledSupported) return',
     "    if (!ctx || typeof ctx.isIdle !== 'function') {",
     '      postAgentEndOnce()',

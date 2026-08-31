@@ -1,10 +1,13 @@
-import type { CodexManagedAccount } from '../../shared/types'
+import type { CodexManagedAccount } from '../../shared/managed-account-types'
 
-type CodexAuthIdentity = {
+export type CodexAuthIdentity = {
   email: string | null
   providerAccountId: string | null
+  workspaceLabel: string | null
   workspaceAccountId: string | null
 }
+
+type CodexAuthOwnershipIdentity = Omit<CodexAuthIdentity, 'workspaceLabel'>
 
 // Why: stale shared-home PTYs can write after an account switch, so read-back
 // needs a positive claim match instead of trusting the selected path alone.
@@ -13,13 +16,11 @@ export function codexAuthMatchesManagedAccount(
   account: CodexManagedAccount,
   managedAuthContents: string | null
 ): boolean {
-  const identity = readIdentityFromAuthContents(runtimeAuthContents)
+  const identity = readCodexAuthIdentity(runtimeAuthContents)
   if (!identity) {
     return false
   }
-  const managedIdentity = managedAuthContents
-    ? readIdentityFromAuthContents(managedAuthContents)
-    : null
+  const managedIdentity = managedAuthContents ? readCodexAuthIdentity(managedAuthContents) : null
   const selectedEmail = firstNonNull(normalizeField(account.email), managedIdentity?.email)
   const selectedProviderId = firstNonNull(
     normalizeField(account.providerAccountId),
@@ -29,8 +30,17 @@ export function codexAuthMatchesManagedAccount(
     normalizeField(account.workspaceAccountId),
     managedIdentity?.workspaceAccountId
   )
-  const emailMatches = Boolean(selectedEmail && identity.email && selectedEmail === identity.email)
-  if (selectedEmail && identity.email && selectedEmail !== identity.email) {
+  const emailMatches = identityFieldsAgree(selectedEmail, identity.email)
+  if (
+    identityContradictsSelection(
+      {
+        email: selectedEmail,
+        providerAccountId: selectedProviderId,
+        workspaceAccountId: selectedWorkspaceId
+      },
+      identity
+    )
+  ) {
     return false
   }
   if (!identityFieldMatches(selectedProviderId, identity.providerAccountId)) {
@@ -50,14 +60,34 @@ export function codexAuthMatchesManagedAccount(
   )
 }
 
+// Why: an unreadable managed home cannot be compared byte-for-byte, so only the
+// account record itself can rule that home out as the credential's owner.
+export function codexAuthCouldBelongToManagedAccount(
+  runtimeAuthContents: string,
+  account: CodexManagedAccount
+): boolean {
+  const identity = readCodexAuthIdentity(runtimeAuthContents)
+  return (
+    !identity ||
+    !identityContradictsSelection(
+      {
+        email: normalizeField(account.email),
+        providerAccountId: normalizeField(account.providerAccountId),
+        workspaceAccountId: normalizeField(account.workspaceAccountId)
+      },
+      identity
+    )
+  )
+}
+
 // Why: the shared mirror may still hold managed credentials; only the same
 // positively identified system account may ever be read back to ~/.codex.
 export function codexAuthMatchesSystemDefaultIdentity(
   runtimeAuthContents: string,
   systemDefaultAuthContents: string
 ): boolean {
-  const runtimeIdentity = readIdentityFromAuthContents(runtimeAuthContents)
-  const systemDefaultIdentity = readIdentityFromAuthContents(systemDefaultAuthContents)
+  const runtimeIdentity = readCodexAuthIdentity(runtimeAuthContents)
+  const systemDefaultIdentity = readCodexAuthIdentity(systemDefaultAuthContents)
   if (!runtimeIdentity || !systemDefaultIdentity) {
     return false
   }
@@ -125,7 +155,7 @@ export function codexAuthIsFresher(
   return compareCodexAuthFreshness(candidateAuthContents, baselineAuthContents) === 1
 }
 
-function readIdentityFromAuthContents(contents: string): CodexAuthIdentity | null {
+export function readCodexAuthIdentity(contents: string): CodexAuthIdentity | null {
   const raw = parseJsonRecord(contents)
   if (!raw) {
     return null
@@ -137,21 +167,28 @@ function readIdentityFromAuthContents(contents: string): CodexAuthIdentity | nul
   const payload = idToken ? parseJwtPayload(idToken) : null
   const authClaims = readRecordClaim(payload, 'https://api.openai.com/auth')
   const profileClaims = readRecordClaim(payload, 'https://api.openai.com/profile')
+  // Why: normalize before the fallback chains, not after — a blank tokens.account_id
+  // must fall through to the JWT claims rather than ending the chain on an empty string.
+  const tokenAccountId = normalizeField(
+    readStringClaim(tokens, 'account_id') ?? readStringClaim(tokens, 'accountId')
+  )
 
   return {
     email: normalizeField(
       readStringClaim(payload, 'email') ?? readStringClaim(profileClaims, 'email')
     ),
     providerAccountId: normalizeField(
-      readStringClaim(tokens, 'account_id') ??
-        readStringClaim(tokens, 'accountId') ??
+      tokenAccountId ??
         readStringClaim(authClaims, 'chatgpt_account_id') ??
         readStringClaim(payload, 'chatgpt_account_id')
     ),
+    workspaceLabel: normalizeField(
+      readStringClaim(authClaims, 'workspace_name') ??
+        readStringClaim(profileClaims, 'workspace_name')
+    ),
     workspaceAccountId: normalizeField(
       readStringClaim(authClaims, 'workspace_account_id') ??
-        readStringClaim(tokens, 'account_id') ??
-        readStringClaim(tokens, 'accountId') ??
+        tokenAccountId ??
         readStringClaim(payload, 'chatgpt_account_id')
     )
   }
@@ -239,4 +276,34 @@ function firstNonNull(...values: (string | null | undefined)[]): string | null {
 
 function identityFieldMatches(selectedField: string | null, runtimeField: string | null): boolean {
   return !selectedField || Boolean(runtimeField && selectedField === runtimeField)
+}
+
+// Why: only a claim both sides carry can rule an account out — a credential with
+// no identity claims (api key, PAT, bedrock) contradicts nothing. A ChatGPT
+// rename leaves the record email stale, so a matching account id outranks it.
+function identityContradictsSelection(
+  selected: CodexAuthOwnershipIdentity,
+  identity: CodexAuthOwnershipIdentity
+): boolean {
+  if (
+    identityFieldsConflict(selected.providerAccountId, identity.providerAccountId) ||
+    identityFieldsConflict(selected.workspaceAccountId, identity.workspaceAccountId)
+  ) {
+    return true
+  }
+  return (
+    identityFieldsConflict(selected.email, identity.email) &&
+    !identityFieldsAgree(selected.providerAccountId, identity.providerAccountId)
+  )
+}
+
+function identityFieldsAgree(selectedField: string | null, runtimeField: string | null): boolean {
+  return Boolean(selectedField && runtimeField && selectedField === runtimeField)
+}
+
+function identityFieldsConflict(
+  selectedField: string | null,
+  runtimeField: string | null
+): boolean {
+  return Boolean(selectedField && runtimeField && selectedField !== runtimeField)
 }

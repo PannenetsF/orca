@@ -6,7 +6,7 @@ import { useTabAgent } from '@/lib/use-tab-agent'
 import { isImeCompositionKeyDown } from '@/lib/ime-composition-keyboard-event'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '../../../../shared/terminal-tab-types'
 import type { TabDragItemData } from '../tab-group/useTabDragSplit'
 import { useAppStore } from '../../store'
 import {
@@ -24,9 +24,9 @@ import { useOptionalShortcutLabel } from '@/hooks/useShortcutLabel'
 import { useTabStripPointerActivation } from './tab-strip-pointer-activation'
 import { TerminalTabLeadingIcon } from './TerminalTabLeadingIcon'
 import {
-  hasUnreadAgentCompletionForTerminalTab,
   isTerminalTabActivityLive,
-  resolveTerminalTabActivityStatus
+  resolveTerminalTabActivityStatus,
+  terminalTabHasUnreadActivity
 } from './terminal-tab-activity-status'
 
 type SortableTabProps = {
@@ -35,6 +35,7 @@ type SortableTabProps = {
   groupId: string
   tabCount: number
   hasTabsToRight: boolean
+  hasTabsToLeft: boolean
   isActive: boolean
   isPinned: boolean
   isExpanded: boolean
@@ -42,6 +43,7 @@ type SortableTabProps = {
   onClose: (tabId: string) => void
   onCloseOthers: (tabId: string) => void
   onCloseToRight: (tabId: string) => void
+  onCloseToLeft: (tabId: string) => void
   onSetCustomTitle: (tabId: string, title: string | null) => void
   onSetTabColor: (tabId: string, color: string | null) => void
   onTogglePin: () => void
@@ -49,12 +51,6 @@ type SortableTabProps = {
   dragData: TabDragItemData
   dropIndicator?: DropIndicator
   includeTopTabBorder?: boolean
-  /** True when this agent terminal can switch to native chat view; surfaces the "Switch view" context-menu item. */
-  canToggleViewMode?: boolean
-  /** True when the tab is currently showing the native chat view. */
-  isChatView?: boolean
-  /** Toggle the tab between terminal and native chat view. */
-  onToggleViewMode?: () => void
 }
 
 export const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
@@ -65,6 +61,7 @@ export default function SortableTab({
   groupId,
   tabCount,
   hasTabsToRight,
+  hasTabsToLeft,
   isActive,
   isPinned,
   isExpanded,
@@ -72,22 +69,22 @@ export default function SortableTab({
   onClose,
   onCloseOthers,
   onCloseToRight,
+  onCloseToLeft,
   onSetCustomTitle,
   onSetTabColor,
   onTogglePin,
   onToggleExpand,
   dragData,
   dropIndicator,
-  includeTopTabBorder = true,
-  canToggleViewMode = false,
-  isChatView = false,
-  onToggleViewMode
+  includeTopTabBorder = true
 }: SortableTabProps): React.JSX.Element {
   // Why: agent-completion unread exists even with terminal-attention off; collapse both sources to one primitive so unrelated tabs don't re-render.
-  const hasUnreadActivity = useAppStore(
-    (s) =>
-      s.unreadTerminalTabs[tab.id] === true ||
-      hasUnreadAgentCompletionForTerminalTab(s.unreadAgentCompletionPanes, tab.id)
+  const hasUnreadActivity = useAppStore((s) =>
+    terminalTabHasUnreadActivity({
+      terminalTabId: tab.id,
+      unreadTerminalTabs: s.unreadTerminalTabs,
+      unreadAgentCompletionPanes: s.unreadAgentCompletionPanes
+    })
   )
   // Why: resolver returns a primitive so unrelated agent updates can't repaint this tab (pane bucketing memoized per snapshot).
   const activityStatus = useAppStore((s) =>
@@ -418,18 +415,17 @@ export default function SortableTab({
         point={menuPoint}
         tabCount={tabCount}
         hasTabsToRight={hasTabsToRight}
+        hasTabsToLeft={hasTabsToLeft}
         isPinned={isPinned}
         onOpenChange={setMenuOpen}
         onActivate={onActivate}
         onClose={onClose}
         onCloseOthers={onCloseOthers}
         onCloseToRight={onCloseToRight}
+        onCloseToLeft={onCloseToLeft}
         onRenameOpen={handleRenameOpen}
         onSetTabColor={onSetTabColor}
         onTogglePin={onTogglePin}
-        canToggleViewMode={canToggleViewMode}
-        isChatView={isChatView}
-        onToggleViewMode={onToggleViewMode}
       />
     </>
   )

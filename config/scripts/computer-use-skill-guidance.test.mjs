@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { BUNDLED_SKILL_GUIDES } from '../../src/cli/bundled-skill-guides'
 
 const projectDir = resolve(import.meta.dirname, '../..')
 // Why: computer-use now ships a hybrid discovery stub, so its version-sensitive command
@@ -8,6 +9,7 @@ const projectDir = resolve(import.meta.dirname, '../..')
 // installable stub projection is checked separately below.
 const guidePath = join(projectDir, 'skill-guides', 'computer-use.md')
 const stubPath = join(projectDir, 'skills', 'computer-use', 'SKILL.md')
+const bundledGuide = BUNDLED_SKILL_GUIDES.find((guide) => guide.name === 'computer-use')?.markdown
 
 describe('computer-use skill guidance', () => {
   it('keeps web-app targeting on the computer-use surface', () => {
@@ -43,6 +45,27 @@ describe('computer-use skill guidance', () => {
 
     expect(skill).toContain('`result.snapshot.treeText`')
     expect(skill).not.toContain('`result.elements`')
+  })
+
+  it('explains how JSON and pretty output handle screenshots', () => {
+    expect(bundledGuide).toBeDefined()
+
+    for (const skill of [readFileSync(guidePath, 'utf8'), bundledGuide]) {
+      expect(skill).toContain('request screenshots by default unless `--no-screenshot`')
+      expect(skill).toContain('A successful `--json` capture')
+      expect(skill).toContain('`result.screenshot.path`')
+      expect(skill).toContain('inline base64 `result.screenshot.data`')
+      expect(skill).toContain('Pretty output does not save')
+    }
+  })
+
+  it('requires atomic modifier-click actions in the source and bundled guide', () => {
+    expect(bundledGuide).toBeDefined()
+
+    for (const skill of [readFileSync(guidePath, 'utf8'), bundledGuide]) {
+      expect(skill).toContain('click --modifiers <chord>')
+      expect(skill).toContain('Never synthesize separate modifier-down and modifier-up commands')
+    }
   })
 })
 

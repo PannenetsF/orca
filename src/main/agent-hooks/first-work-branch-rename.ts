@@ -1,6 +1,7 @@
 // On first agent work in a fresh workspace, replace the auto-generated creature branch (e.g. `you/Nautilus`) with a short work-derived name.
-import type { GlobalSettings, Repo } from '../../shared/types'
-import { getRepoIdFromWorktreeId, splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
+import type { GlobalSettings } from '../../shared/global-settings-types'
+import type { Repo } from '../../shared/repo-types'
+import { getRepoIdFromWorktreeId, splitWorktreeIdForFilesystem } from '../../shared/worktree/id'
 import { parseWorkspaceKey } from '../../shared/workspace-scope'
 import { parsePaneKey } from '../../shared/stable-pane-id'
 import {
@@ -264,6 +265,9 @@ async function runAutoRename(
   const newBranch = await resolveUniqueBranchName(
     exec,
     slug,
+    // Use the non-throwing builder here: the prefix was already validated at
+    // worktree-create time, and this best-effort background rename has its own
+    // retry/stop handling, so it must not throw on prefix issues.
     (slugLeaf) => computeBranchName(slugLeaf, settings, username),
     currentBranch
   )

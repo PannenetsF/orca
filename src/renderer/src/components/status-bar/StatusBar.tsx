@@ -38,11 +38,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAppStore } from '../../store'
 import { selectFloatingWorkspaceHasUnread } from '../../store/selectors'
+import type { GlobalSettings } from '../../../../shared/global-settings-types'
 import type {
   ClaudeRateLimitAccountsState,
-  CodexRateLimitAccountsState,
-  GlobalSettings
-} from '../../../../shared/types'
+  CodexRateLimitAccountsState
+} from '../../../../shared/managed-account-types'
 import type {
   ProviderRateLimits,
   RateLimitRuntimeTarget,
@@ -65,8 +65,13 @@ import { UsageRosterPanel, getTightestUsageSection } from './UsageRosterPanel'
 import { getUsageProviderAccountsSectionId } from './usage-provider-settings-target'
 import { formatRateLimitWindowChipLabel } from '@/lib/window-label-formatter'
 import { useResetCountdownClock } from '@/hooks/useResetCountdownClock'
-import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
+import {
+  markLiveCodexSessionsForRestart,
+  resolveCodexRestartPromptAccountLabel
+} from '@/lib/codex-session-restart'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
+import { SkillUpdateStatusSegment } from './SkillUpdateStatusSegment'
+import { CaffeinateStatusSegment } from './CaffeinateStatusSegment'
 import { RemoteServerUpdateStatusSegment } from './RemoteServerUpdateStatusSegment'
 import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { getVisibleUsageProvider, isUsageEmptyState } from './status-bar-provider-visibility'
@@ -80,6 +85,7 @@ import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { FloatingTerminalIconContextMenu } from '@/components/floating-terminal/FloatingTerminalIconContextMenu'
 import { summarizeCodexRestartStatus } from './codex-restart-status-summary'
+import { isPairedWebClientWindow } from '@/lib/desktop-window-chrome'
 import {
   getWindowsTerminalCapabilityOwnerKey,
   useWindowsTerminalCapabilities
@@ -90,6 +96,7 @@ import {
   selectClaudeProviderAccount,
   selectCodexProviderAccount
 } from '@/runtime/runtime-provider-accounts-client'
+import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
 import {
   getDisplayedUsagePercentage,
@@ -165,16 +172,6 @@ type StatusSwitchGroupOptions = {
 
 function getHostRuntimeLabel(): string {
   return navigator.userAgent.includes('Windows') ? 'Windows' : 'This device'
-}
-
-function getCodexAccountLabel(
-  state: CodexRateLimitAccountsState,
-  accountId: string | null | undefined
-): string {
-  if (accountId == null) {
-    return 'System default'
-  }
-  return state.accounts.find((account) => account.id === accountId)?.email ?? 'Codex account'
 }
 
 function getCodexAccountDisplayLabel(account: CodexStatusAccount): string {
@@ -974,7 +971,10 @@ function MiniBar({
   display: UsagePercentageDisplay
 }): React.JSX.Element {
   return (
-    <div className="w-[48px] h-[6px] rounded-full bg-muted overflow-hidden flex-shrink-0">
+    <div
+      data-usage-bar
+      className="w-[48px] h-[6px] rounded-full bg-muted overflow-hidden flex-shrink-0"
+    >
       <div
         className="h-full rounded-full transition-all duration-300 bg-muted-foreground/40"
         style={{ width: `${getDisplayedUsagePercentage(usedPct, display)}%` }}
@@ -1174,11 +1174,9 @@ const STATUS_BAR_BUCKET_NAMES = new Set(['Flash', 'Pro', '1.5 Pro'])
 
 function VerboseProviderUsage({
   p,
-  compact,
   display
 }: {
   p: ProviderRateLimits
-  compact: boolean
   display: UsagePercentageDisplay
 }): React.JSX.Element {
   if (p.buckets && p.buckets.length > 0) {
@@ -1240,9 +1238,6 @@ function VerboseProviderUsage({
 
   return (
     <>
-      {p.session && !compact ? (
-        <MiniBar usedPct={clampUsedPercent(p.session.usedPercent)} display={display} />
-      ) : null}
       {visibleWindows.map((window, index) => (
         <React.Fragment key={window.key}>
           {index > 0 ? <span className="text-muted-foreground">·</span> : null}
@@ -1316,22 +1311,20 @@ export function ProviderSegment({
     <span className="inline-flex items-center gap-1.5">
       <ProviderIcon provider={provider} />
       {mode === 'verbose' ? (
-        <VerboseProviderUsage p={p} compact={compact} display={display} />
-      ) : (
         <>
           {tightest && !compact ? (
             <MiniBar usedPct={clampUsedPercent(tightest.window.usedPercent)} display={display} />
           ) : null}
-          {tightest ? (
-            <WindowLabel
-              w={tightest.window}
-              label={tightest.label}
-              display={display}
-              showLabel={!compact}
-            />
-          ) : null}
+          <VerboseProviderUsage p={p} display={display} />
         </>
-      )}
+      ) : tightest ? (
+        <WindowLabel
+          w={tightest.window}
+          label={tightest.label}
+          display={display}
+          showLabel={!compact}
+        />
+      ) : null}
       {isStale && <AlertTriangle size={11} className="text-muted-foreground/80" />}
     </span>
   )
@@ -1465,8 +1458,23 @@ export function CodexSwitcherMenu({
       const nextActiveAccountId = getCodexStatusActiveId(next, target)
       if (previousActiveAccountId !== nextActiveAccountId) {
         await markLiveCodexSessionsForRestart({
-          previousAccountLabel: getCodexAccountLabel(accountState, previousActiveAccountId),
-          nextAccountLabel: getCodexAccountLabel(next, nextActiveAccountId)
+          previousAccountLabel: resolveCodexRestartPromptAccountLabel(
+            accountState.accounts,
+            previousActiveAccountId
+          ),
+          nextAccountLabel: resolveCodexRestartPromptAccountLabel(
+            next.accounts,
+            nextActiveAccountId
+          ),
+          // Why: two accounts can share an email, so the labels alone cannot
+          // tell the store whether this switch lands back on the launch account.
+          previousAccountId: previousActiveAccountId ?? null,
+          nextAccountId: nextActiveAccountId ?? null,
+          // Why: the mutation wrote this row's slot only, so panes on any other
+          // lane still launch under the account they already had.
+          target,
+          // Why: clearing a distro-less WSL row nulls every distro slot at once.
+          clearsEveryWslDistro: accountId === null
         })
         // Why: collapse to the summary row (not close) so the follow-up "restart open tabs" prompt appears in the same flow.
         if (mountedRef.current) {
@@ -1482,23 +1490,61 @@ export function CodexSwitcherMenu({
     }
   }
 
-  const handleSignInAccount = async (accountId: string): Promise<void> => {
+  const handleSignInAccount = async (
+    accountId: string,
+    target: CodexStatusRuntimeTarget
+  ): Promise<void> => {
     if (isSwitching || reauthenticatingAccountId !== null) {
       return
     }
+    const previousActiveAccountId = getCodexStatusActiveId(accountState, target)
     setReauthenticatingAccountId(accountId)
     try {
-      const next = await window.api.codexAccounts.reauthenticate({ accountId })
+      const next = await window.api.codexAccounts.reauthenticate({
+        accountId,
+        // Why: signing in from a signed-out status bar should leave the account
+        // usable; the main process still refuses to steal an existing selection.
+        activateIfSelectionWasEmpty: true
+      })
       recordFeatureInteraction('codex-account-switching')
       if (mountedRef.current) {
         setAccounts(next)
       }
       await fetchSettings()
-      if (mountedRef.current && accountsExpandedRef.current) {
+      const nextActiveAccountId = getCodexStatusActiveId(next, target)
+      if (previousActiveAccountId !== nextActiveAccountId) {
+        // Why: sign-in that lands on a new active account changes pane credentials
+        // exactly like an explicit switch, so it owes the same restart prompt.
+        await markLiveCodexSessionsForRestart({
+          previousAccountLabel: resolveCodexRestartPromptAccountLabel(
+            accountState.accounts,
+            previousActiveAccountId
+          ),
+          nextAccountLabel: resolveCodexRestartPromptAccountLabel(
+            next.accounts,
+            nextActiveAccountId
+          ),
+          previousAccountId: previousActiveAccountId ?? null,
+          nextAccountId: nextActiveAccountId ?? null,
+          target
+        })
+        if (mountedRef.current) {
+          setAccountsExpanded(false)
+        }
+      } else if (mountedRef.current && accountsExpandedRef.current) {
         await fetchInactiveCodexAccountUsage()
       }
+      toast.success(
+        translate('auto.components.status.bar.StatusBar.codexSignInSuccess', 'Signed in to Codex')
+      )
     } catch (error) {
       console.error('Failed to re-authenticate Codex account from status bar:', error)
+      toast.error(
+        translate(
+          'auto.components.status.bar.StatusBar.codexSignInError',
+          'Codex sign-in failed. Please try again.'
+        )
+      )
     } finally {
       if (mountedRef.current) {
         setReauthenticatingAccountId(null)
@@ -1795,7 +1841,7 @@ export function CodexSwitcherMenu({
                             onSignIn={() => {
                               suppressNextAccountSelect()
                               if (target.id !== null) {
-                                void handleSignInAccount(target.id)
+                                void handleSignInAccount(target.id, target.runtimeTarget)
                               }
                             }}
                           />
@@ -2344,7 +2390,9 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
       <div className="flex-1" />
 
       <div className="flex items-center gap-3">
+        {!isPairedWebClientWindow() ? <CaffeinateStatusSegment iconOnly={iconOnly} /> : null}
         <RemoteServerUpdateStatusSegment iconOnly={iconOnly} />
+        <SkillUpdateStatusSegment iconOnly={iconOnly} />
         <UpdateStatusSegment compact={compact} iconOnly={iconOnly} />
         <React.Suspense fallback={null}>
           {petEnabled ? <PetStatusSegment /> : null}
@@ -2363,7 +2411,11 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
                   className="relative inline-flex size-5 cursor-pointer items-center justify-center rounded border border-border bg-secondary text-secondary-foreground shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label={
                     showFloatingWorkspaceAttentionDot
-                      ? `${floatingTerminalActionLabel}, new activity`
+                      ? translate(
+                          'auto.components.status.bar.StatusBar.floatingTerminalNewActivity',
+                          '{{label}}, new activity',
+                          { label: floatingTerminalActionLabel }
+                        )
                       : floatingTerminalActionLabel
                   }
                   onClick={() => {

@@ -15,6 +15,7 @@ import {
   type ProcessTableCapture,
   type ProcessTableRow
 } from './pty-descendant-termination'
+import { terminateDescendantSnapshotAndWait } from './pty-descendant-exit-verification'
 
 const CAPTURED_AT_MS = Date.parse('Tue Jul 14 12:00:00 2026')
 
@@ -299,6 +300,49 @@ describe('terminateDescendantSnapshot', () => {
   })
 })
 
+describe('terminateDescendantSnapshotAndWait', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('escalates an identity-matched survivor and verifies its exit', async () => {
+    const survivor = row(20, 10, 20)
+    const sendSignal = vi.fn()
+    const readTable = vi
+      .fn()
+      .mockResolvedValueOnce(tableCapture([survivor]))
+      .mockResolvedValueOnce(tableCapture([]))
+
+    const pending = terminateDescendantSnapshotAndWait(snapshot([survivor]), {
+      sendSignal,
+      readTable,
+      graceMs: 0,
+      verifyMs: 200
+    })
+    await vi.advanceTimersByTimeAsync(50)
+
+    await expect(pending).resolves.toBe(true)
+    expect(sendSignal.mock.calls).toEqual([
+      [20, 'SIGTERM'],
+      [20, 'SIGKILL']
+    ])
+  })
+
+  it('does not claim exit when the verification table is unavailable', async () => {
+    const sendSignal = vi.fn()
+    const result = await terminateDescendantSnapshotAndWait(snapshot([row(20, 10, 20)]), {
+      sendSignal,
+      readTable: vi.fn().mockRejectedValue(new Error('ps exploded'))
+    })
+
+    expect(result).toBe(false)
+    expect(sendSignal).toHaveBeenCalledWith(20, 'SIGTERM')
+  })
+})
+
 describe('createProcessTableSnapshotReader', () => {
   it('coalesces same-turn teardown requests onto one fresh scan', async () => {
     const capture = tableCapture([row(10, 1, 10)])
@@ -391,6 +435,195 @@ describe('killWithDescendantSweep', () => {
     await pending
     expect(killRoot).toHaveBeenCalledOnce()
     expect(sendSignal).not.toHaveBeenCalled()
+  })
+
+  it('on Windows terminates the owning job instead of probing and taskkilling', async () => {
+    // The job names the tree Orca created, so there is nothing to prove: no
+    // process-table scrape, no parent-pid walk, no pid-recycle guess.
+    const events: string[] = []
+    const terminateOwnedTree = vi.fn(() => {
+      events.push('job-kill')
+      return 'terminated' as const
+    })
+    const killWindowsTree = vi.fn(async () => {})
+    const verifyTreeKillTarget = vi.fn(async () => 'own' as const)
+    const killRoot = vi.fn(() => events.push('root-kill'))
+
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      terminateOwnedTree,
+      killWindowsTree,
+      verifyTreeKillTarget
+    })
+
+    expect(terminateOwnedTree).toHaveBeenCalledOnce()
+    expect(verifyTreeKillTarget).not.toHaveBeenCalled()
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    // killRoot still runs: the job kills processes, the handle still needs closing.
+    expect(events).toEqual(['job-kill', 'root-kill'])
+  })
+
+  it('on Windows falls back to the probe when the pty has no job', async () => {
+    // A pty started before this build, or one the OS refused to assign, has no
+    // job. `unavailable` must not be read as "already dead".
+    const terminateOwnedTree = vi.fn(() => 'unavailable' as const)
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      terminateOwnedTree,
+      killWindowsTree,
+      verifyTreeKillTarget: async () => 'own'
+    })
+
+    expect(killWindowsTree).toHaveBeenCalledWith(4242)
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows taskkills the process tree before killRoot (#10004)', async () => {
+    const events: string[] = []
+    const killWindowsTree = vi.fn(async () => {
+      events.push('tree-kill')
+    })
+    const killRoot = vi.fn(() => events.push('root-kill'))
+    const sendSignal = vi.fn()
+    const readTable = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      sendSignal,
+      readTable,
+      // Pin identity so the assertion holds wherever the suite runs, including a
+      // real Windows host where the default probe would query this fake pid.
+      verifyTreeKillTarget: async () => 'own'
+    })
+    expect(killWindowsTree).toHaveBeenCalledWith(4242)
+    expect(killRoot).toHaveBeenCalledOnce()
+    expect(sendSignal).not.toHaveBeenCalled()
+    expect(readTable).not.toHaveBeenCalled()
+    expect(events).toEqual(['tree-kill', 'root-kill'])
+  })
+
+  it('on Windows still kills the root when ownership is lost mid-sweep', async () => {
+    const killWindowsTree = vi.fn(async () => {
+      throw new Error('should not run')
+    })
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      ownsRoot: () => false
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows skips taskkill when the root pid was recycled by a stranger', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      verifyTreeKillTarget: async () => 'foreign'
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows skips taskkill when the root pid is already gone', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      verifyTreeKillTarget: async () => 'absent'
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows taskkills a root the OS confirms is still ours', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      verifyTreeKillTarget: async () => 'own'
+    })
+    expect(killWindowsTree).toHaveBeenCalledWith(4242)
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows skips taskkill when identity is unknown', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      verifyTreeKillTarget: async () => 'unknown'
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows skips taskkill when the identity probe throws', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      verifyTreeKillTarget: async () => {
+        throw new Error('probe exploded')
+      }
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows re-checks ownership lost while the identity probe ran', async () => {
+    const killWindowsTree = vi.fn(async () => {})
+    const killRoot = vi.fn()
+    let alive = true
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree,
+      ownsRoot: () => alive,
+      verifyTreeKillTarget: async () => {
+        alive = false
+        return 'own'
+      }
+    })
+    expect(killWindowsTree).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows does not probe identity once ownership is already lost', async () => {
+    const verifyTreeKillTarget = vi.fn(async () => 'own' as const)
+    const killRoot = vi.fn()
+    await killWithDescendantSweep(4242, killRoot, {
+      platform: 'win32',
+      killWindowsTree: vi.fn(async () => {}),
+      ownsRoot: () => false,
+      verifyTreeKillTarget
+    })
+    expect(verifyTreeKillTarget).not.toHaveBeenCalled()
+    expect(killRoot).toHaveBeenCalledOnce()
+  })
+
+  it('on Windows still kills the root when taskkill fails', async () => {
+    const killWindowsTree = vi.fn(async () => {
+      throw new Error('taskkill failed')
+    })
+    const killRoot = vi.fn()
+    await expect(
+      killWithDescendantSweep(99, killRoot, {
+        platform: 'win32',
+        killWindowsTree,
+        verifyTreeKillTarget: async () => 'own'
+      })
+    ).resolves.toBeUndefined()
+    expect(killRoot).toHaveBeenCalledOnce()
   })
 
   it('does not signal a captured tree after the caller loses root ownership', async () => {

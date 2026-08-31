@@ -12,12 +12,12 @@ import {
   patchLiveEntriesByWorktree,
   recordLiveEntriesFullRebuild
 } from './worktree-agent-live-index-patch'
-import type { TerminalLayoutSnapshot } from '../../../../shared/types'
+import { selectWorktreeAgentOrchestration } from './worktree-agent-orchestration-index'
+import type { TerminalLayoutSnapshot } from '../../../../shared/terminal-tab-types'
 
 const EMPTY_LIVE_ENTRIES: AgentStatusEntry[] = []
 const EMPTY_MIGRATION_UNSUPPORTED_ENTRIES: MigrationUnsupportedPtyEntry[] = []
 const EMPTY_RETAINED: RetainedAgentEntry[] = []
-const EMPTY_RUNTIME_AGENT_ORCHESTRATION: Record<string, AgentStatusOrchestrationContext> = {}
 // Why: selector unit tests often pass partial store mocks; production state
 // owns these maps, but missing mock maps should behave like empty slices.
 const EMPTY_RECORD = {}
@@ -28,7 +28,9 @@ type WorktreeAgentRowsState = Pick<
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
   | 'tabsByWorktree'
->
+> & {
+  unifiedTabsByWorktree?: AppState['unifiedTabsByWorktree']
+}
 
 type TabWorktreeIndexCache = {
   tabsByWorktree: WorktreeAgentRowsState['tabsByWorktree']
@@ -82,18 +84,38 @@ function getTabIdToWorktreeId(
   return tabIdToWorktreeId
 }
 
+function getLiveTabIdToWorktreeId(
+  tabsByWorktree: WorktreeAgentRowsState['tabsByWorktree'],
+  unifiedTabsByWorktree: WorktreeAgentRowsState['unifiedTabsByWorktree']
+): Map<string, string> {
+  const tabIdToWorktreeId = new Map(getTabIdToWorktreeId(tabsByWorktree))
+  for (const [worktreeId, tabs] of Object.entries(unifiedTabsByWorktree ?? {})) {
+    for (const tab of tabs) {
+      if (tab.contentType === 'agent-session') {
+        tabIdToWorktreeId.set(tab.id, worktreeId)
+      }
+    }
+  }
+  return tabIdToWorktreeId
+}
+
 function getLiveEntriesByWorktree(state: WorktreeAgentRowsState): Map<string, AgentStatusEntry[]> {
   const agentStatusByPaneKey = state.agentStatusByPaneKey ?? EMPTY_RECORD
   const tabsByWorktree = state.tabsByWorktree ?? EMPTY_RECORD
+  const unifiedTabsByWorktree = state.unifiedTabsByWorktree
   if (
     liveEntriesByWorktreeCache?.tabsByWorktree === tabsByWorktree &&
+    liveEntriesByWorktreeCache.unifiedTabsByWorktree === unifiedTabsByWorktree &&
     liveEntriesByWorktreeCache.agentStatusByPaneKey === agentStatusByPaneKey
   ) {
     return liveEntriesByWorktreeCache.entriesByWorktree
   }
 
-  const tabIdToWorktreeId = getTabIdToWorktreeId(tabsByWorktree)
-  if (liveEntriesByWorktreeCache?.tabsByWorktree === tabsByWorktree) {
+  const tabIdToWorktreeId = getLiveTabIdToWorktreeId(tabsByWorktree, unifiedTabsByWorktree)
+  if (
+    liveEntriesByWorktreeCache?.tabsByWorktree === tabsByWorktree &&
+    liveEntriesByWorktreeCache.unifiedTabsByWorktree === unifiedTabsByWorktree
+  ) {
     const patched = patchLiveEntriesByWorktree(
       liveEntriesByWorktreeCache,
       agentStatusByPaneKey,
@@ -102,6 +124,7 @@ function getLiveEntriesByWorktree(state: WorktreeAgentRowsState): Map<string, Ag
     if (patched) {
       liveEntriesByWorktreeCache = {
         tabsByWorktree,
+        unifiedTabsByWorktree,
         agentStatusByPaneKey,
         entriesByWorktree: patched
       }
@@ -128,6 +151,7 @@ function getLiveEntriesByWorktree(state: WorktreeAgentRowsState): Map<string, Ag
   }
   liveEntriesByWorktreeCache = {
     tabsByWorktree,
+    unifiedTabsByWorktree,
     agentStatusByPaneKey,
     entriesByWorktree
   }
@@ -227,6 +251,10 @@ export function selectRetainedAgentEntriesForWorktree(
   return getRetainedEntriesByWorktree(state).get(worktreeId) ?? EMPTY_RETAINED
 }
 
+// Why: reads a shared worktree-keyed index instead of rescanning every
+// orchestration context. Zustand re-runs each mounted card's selector on every
+// publication, so the old per-card scan was O(cards x contexts) on unrelated
+// traffic; only the first card through a given store version now pays a build.
 export function selectRuntimeAgentOrchestrationForWorktree(
   state: Pick<
     AppState,
@@ -237,33 +265,7 @@ export function selectRuntimeAgentOrchestrationForWorktree(
   >,
   worktreeId: string
 ): Record<string, AgentStatusOrchestrationContext> {
-  const tabs = (state.tabsByWorktree ?? EMPTY_RECORD)[worktreeId] ?? []
-  const tabIds = new Set(tabs.map((tab) => tab.id))
-  const out: Record<string, AgentStatusOrchestrationContext> = {}
-  const runtimeAgentOrchestrationByPaneKey =
-    state.runtimeAgentOrchestrationByPaneKey ?? EMPTY_RECORD
-  const agentStatusByPaneKey = state.agentStatusByPaneKey ?? EMPTY_RECORD
-  const retainedAgentsByPaneKey = state.retainedAgentsByPaneKey ?? EMPTY_RECORD
-  for (const [paneKey, orchestration] of Object.entries(runtimeAgentOrchestrationByPaneKey)) {
-    const parsed = parsePaneKey(paneKey)
-    const parsedParent = orchestration.parentPaneKey
-      ? parsePaneKey(orchestration.parentPaneKey)
-      : null
-    const liveEntry = agentStatusByPaneKey[paneKey]
-    const retainedEntry = retainedAgentsByPaneKey[paneKey]
-    // Why: child agent terminals can be attributed to a worktree before their
-    // tab reaches this renderer, or after the row has been retained as done.
-    // The parent link must still reach that worktree card.
-    if (
-      (parsed && tabIds.has(parsed.tabId)) ||
-      (parsedParent && tabIds.has(parsedParent.tabId)) ||
-      liveEntry?.worktreeId === worktreeId ||
-      retainedEntry?.worktreeId === worktreeId
-    ) {
-      out[paneKey] = orchestration
-    }
-  }
-  return Object.keys(out).length > 0 ? out : EMPTY_RUNTIME_AGENT_ORCHESTRATION
+  return selectWorktreeAgentOrchestration(state, worktreeId)
 }
 
 export function selectTerminalLayoutsForWorktree(

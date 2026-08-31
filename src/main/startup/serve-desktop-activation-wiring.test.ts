@@ -5,27 +5,35 @@ import { describe, expect, it } from 'vitest'
 describe('serve desktop activation wiring', () => {
   const source = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8')
 
-  it('routes second-instance and app activation through one safety gate', () => {
+  it('routes second-instance and windowless app activation through one safety gate', () => {
     expect(source).toContain('createServeDesktopActivationGate({')
     expect(source).toContain('acquireSingleInstanceLock(app, requestDesktopActivation)')
-    expect(source).toContain("app.on('activate', requestDesktopActivation)")
+    expect(source).toContain('createMacAppActivationHandler({')
+    expect(source).toContain("app.on('activate', handleMacAppActivation)")
     expect(source).toContain('getDesktopWindowStatus: getDesktopWindowStatus')
   })
 
   it('settles the persistent provider before headless PTY registration', () => {
     const appReadyIndex = source.indexOf('app.whenReady().then(async () => {')
     const startupIndex = source.indexOf(
-      '\n  startTerminalRuntimeStartupServices()\n',
+      'bindTerminalRuntimeStartupServices(Promise.resolve(startTerminalRuntimeStartupServices()))',
       appReadyIndex
     )
     const serveIndex = source.indexOf('if (serveOptions) {', appReadyIndex)
     const ptyReadyIndex = source.indexOf('await localPtyStartupReady', serveIndex)
-    const headlessRegistrationIndex = source.indexOf('registerHeadlessPtyRuntime(', serveIndex)
+    const providerReadyIndex = source.indexOf('await localPtyProviderStartupReady', serveIndex)
+    const headlessRegistrationIndex = source.indexOf(
+      'await registerHeadlessPtyRuntime(',
+      serveIndex
+    )
+    const rpcIndex = source.indexOf('await runtimeRpc.start()', serveIndex)
 
     expect(startupIndex).toBeGreaterThanOrEqual(0)
     expect(startupIndex).toBeLessThan(serveIndex)
     expect(ptyReadyIndex).toBeGreaterThan(serveIndex)
-    expect(headlessRegistrationIndex).toBeGreaterThan(ptyReadyIndex)
+    expect(providerReadyIndex).toBeGreaterThan(ptyReadyIndex)
+    expect(headlessRegistrationIndex).toBeGreaterThan(providerReadyIndex)
+    expect(headlessRegistrationIndex).toBeLessThan(rpcIndex)
     expect(source).not.toContain(
       'if (!isServeMode) {\n    startDesktopFirstWindowStartupServices()'
     )

@@ -10,7 +10,15 @@ const liveInputStatusSource = readFileSync(
   'utf8'
 )
 const commandInputStylesSource = readFileSync(
-  new URL('../../app/h/[hostId]/session/mobile-session-command-input-styles.ts', import.meta.url),
+  new URL('../session/mobile-session-command-input-styles.ts', import.meta.url),
+  'utf8'
+)
+const liveInputFocusSource = readFileSync(
+  new URL('./use-terminal-live-input-focus.ts', import.meta.url),
+  'utf8'
+)
+const sendCompletionGenerationSource = readFileSync(
+  new URL('../session/use-mobile-send-completion-generation.ts', import.meta.url),
   'utf8'
 )
 
@@ -35,13 +43,25 @@ describe('terminal live input affordance', () => {
     expect(block).toContain('pressed && styles.liveInputFocusTargetPressed')
     expect(block).toContain('!canSend && styles.liveInputFocusTargetDisabled')
     expect(block).toContain('showSoftInputOnFocus')
-    expect(sessionRouteSource).toContain('focusTerminalLiveInputTarget(liveInputRef.current')
-    expect(sessionRouteSource).toContain('keyboardHeight')
-    expect(sessionRouteSource).toContain('scheduleTerminalLiveInputFocus(liveInputFocusTimerRef')
+    expect(block).toContain('liveInputText={liveInputCapture}')
+    expect(sessionRouteSource).toContain('useTerminalLiveInputFocus({')
+    expect(sessionRouteSource).toContain('useMobileSendCompletionGeneration({')
+    expect(sessionRouteSource).toContain('onBlur: resetLiveInputFocus')
+    expect(sendCompletionGenerationSource).toContain('return () => {')
+    expect(sendCompletionGenerationSource).toContain('onBlur()')
+    expect(liveInputFocusSource).toContain('focusTerminalLiveInputTarget(inputRef.current')
+    expect(liveInputFocusSource).toContain('lifecycleIdentity,')
+    expect(liveInputFocusSource).toContain('resetLiveInputFocus')
+    expect(liveInputFocusSource).toContain('keyboardHeight: context.keyboardHeight')
+    expect(liveInputFocusSource).toContain(
+      'scheduleTerminalLiveInputFocus(timerRef, focusLiveInput)'
+    )
   })
 
   it('makes the live keyboard target visible instead of status-only chrome', () => {
     expect(liveInputStatusSource).toContain("'Tap to show keyboard'")
+    expect(liveInputStatusSource).toContain("liveInputText || 'Tap to show keyboard'")
+    expect(liveInputStatusSource).toContain('ellipsizeMode="head"')
     expect(commandInputStylesSource).toContain('backgroundColor: colors.bgRaised')
     expect(commandInputStylesSource).toContain('borderWidth: 1')
     expect(commandInputStylesSource).toContain('liveInputFocusTargetPressed')

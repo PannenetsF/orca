@@ -16,6 +16,12 @@ import {
 import { parseRemoteRuntimeJsonText } from '../../../shared/remote-runtime-request-frames'
 import type { MobileE2EEOutboundMemoryBudget } from './mobile-e2ee-outbound-memory-budget'
 import { MobileE2EEDesktopOutboundOwner } from './mobile-e2ee-desktop-outbound-owner'
+import { parseRuntimeClientCapabilities } from './runtime-client-capabilities'
+import type { RuntimeCapability } from '../../../shared/protocol-version'
+import type { EventProps } from '../../../shared/telemetry-events'
+import { track } from '../../telemetry/client'
+
+type OutboundBudgetEmitter = EventProps<'remote_outbound_budget_close'>['emitter']
 
 const HANDSHAKE_TIMEOUT_MS = 10_000
 const MAX_CONSECUTIVE_DECRYPT_FAILURES = 5
@@ -62,6 +68,7 @@ export class E2EEChannel {
 
   deviceToken: string | null = null
   authenticatedDevice: E2EEAuthenticatedDevice | null = null
+  clientCapabilities: readonly RuntimeCapability[] = []
 
   constructor(ws: WebSocket, options: E2EEChannelOptions) {
     this.ws = ws
@@ -144,13 +151,13 @@ export class E2EEChannel {
         return
       }
       if (!isMobileE2EETextPayloadWithinLimit(response)) {
-        this.onError(1013, 'Outbound reply buffer overflow')
+        this.closeForOutboundBudget('size')
         return
       }
       this.outbound.enqueueLegacyText(
         encrypt(response, this.sharedKey),
         () => Boolean(this.sharedKey),
-        () => this.onError(1013, 'Outbound reply buffer overflow')
+        () => this.closeForOutboundBudget('queue')
       )
     }
     const encryptedBinaryReply = (response: Uint8Array<ArrayBufferLike>): boolean => {
@@ -158,7 +165,7 @@ export class E2EEChannel {
         return false
       }
       if (!isMobileE2EEBinaryPayloadWithinLimit(response)) {
-        this.onError(1013, 'Outbound reply buffer overflow')
+        this.closeForOutboundBudget('size')
         return false
       }
       if (!this.outbound.canSend(response.byteLength + 40)) {
@@ -246,6 +253,7 @@ export class E2EEChannel {
     }
     const authenticatedDevice = authentication.device
 
+    this.clientCapabilities = parseRuntimeClientCapabilities(authentication.auth.clientCapabilities)
     this.deviceToken = authenticatedDevice.deviceToken
     this.authenticatedDevice = authenticatedDevice
     this.state = 'ready'
@@ -294,12 +302,21 @@ export class E2EEChannel {
       return false
     }
     if (!isMobileE2EEOutboundItemWithinLimit(item)) {
-      this.onError(1013, 'Outbound reply buffer overflow')
+      this.closeForOutboundBudget('size')
       return false
     }
-    return this.outbound.enqueueV2(item, this.v2Session, () =>
-      this.onError(1013, 'Outbound reply buffer overflow')
-    )
+    return this.outbound.enqueueV2(item, this.v2Session, () => this.closeForOutboundBudget('queue'))
+  }
+
+  // Why: this close kills the whole remote session. `size` means a producer emitted something
+  // too big and should fall to zero once producers cap themselves; `queue` means a backed-up link.
+  private closeForOutboundBudget(emitter: OutboundBudgetEmitter): void {
+    try {
+      track('remote_outbound_budget_close', { emitter })
+    } catch {
+      // Telemetry is best-effort; closing the unsafe socket remains authoritative.
+    }
+    this.onError(1013, 'Outbound reply buffer overflow')
   }
 
   private sendEncryptedControl(message: unknown): void {
@@ -307,9 +324,7 @@ export class E2EEChannel {
       this.enqueueV2({ kind: 'text', plaintext: JSON.stringify(message) })
     } else if (this.ws.readyState === this.ws.OPEN && this.sharedKey) {
       const frame = encrypt(JSON.stringify(message), this.sharedKey)
-      this.outbound.sendLegacyFrame(frame, () =>
-        this.onError(1013, 'Outbound reply buffer overflow')
-      )
+      this.outbound.sendLegacyFrame(frame, () => this.closeForOutboundBudget('queue'))
     }
   }
 

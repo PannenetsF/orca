@@ -2,14 +2,23 @@ import { resolveAgentTypeFromTerminalTitle } from '@/components/sidebar/worktree
 import { classifyTitleActivity } from '@/lib/pane-agent-evidence'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { resolveRuntimePaneTitleLeafIdFromRoot } from '@/lib/runtime-pane-title-leaf-id'
+import { containsAgentSpinnerGlyph } from '../../../shared/agent-title-core'
 import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalTab
-} from '../../../shared/types'
+} from '../../../shared/terminal-tab-types'
+import type { TuiAgent } from '../../../shared/tui-agent'
 import type { LiveAgentWorktreeStatus } from './worktree-activity-state'
 
-export type WorktreeStatus = 'active' | 'working' | 'permission' | 'done' | 'inactive'
+export type WorktreeStatus =
+  | 'active'
+  | 'working'
+  | 'monitoring'
+  | 'permission'
+  | 'interrupted'
+  | 'done'
+  | 'inactive'
 
 type WorktreeStatusHeuristicOptions = {
   liveAgentStatus?: LiveAgentWorktreeStatus
@@ -21,13 +30,15 @@ type WorktreeStatusHeuristicOptions = {
 const STATUS_LABELS: Record<WorktreeStatus, string> = {
   active: 'Active',
   working: 'Working',
+  monitoring: 'Monitoring background tasks',
   permission: 'Needs permission',
+  interrupted: 'Interrupted',
   done: 'Done',
   inactive: 'Inactive'
 }
 
 export function getWorktreeStatus(
-  tabs: readonly Pick<TerminalTab, 'id' | 'title'>[],
+  tabs: readonly Pick<TerminalTab, 'id' | 'title' | 'launchAgent'>[],
   browserTabs: readonly { id: string }[],
   ptyIdsByTabId: Record<string, string[]>,
   runtimePaneTitlesByTabId: Record<string, Record<number, string>> = {},
@@ -46,6 +57,9 @@ export function getWorktreeStatus(
   if (options.liveAgentStatus === 'working' || hasStatus('working')) {
     return 'working'
   }
+  if (options.liveAgentStatus === 'monitoring') {
+    return 'monitoring'
+  }
   if (liveTabs.length > 0 || browserTabs.length > 0) {
     // Why: browser-only worktrees (no PTY) are still active from the user's point of view.
     return 'active'
@@ -54,7 +68,7 @@ export function getWorktreeStatus(
 }
 
 function tabHasStatus(
-  tab: Pick<TerminalTab, 'id' | 'title'>,
+  tab: Pick<TerminalTab, 'id' | 'title' | 'launchAgent'>,
   runtimePaneTitlesByTabId: Record<string, Record<number, string>>,
   status: 'permission' | 'working',
   options: WorktreeStatusHeuristicOptions
@@ -77,7 +91,10 @@ function tabHasStatus(
       ) {
         continue
       }
-      if (classifyTitleActivity(title) === status && titleStatusIsAgentAttributable(title)) {
+      if (
+        classifyTitleActivity(title) === status &&
+        titleStatusIsAgentAttributable(title, tab.launchAgent)
+      ) {
         return true
       }
     }
@@ -87,12 +104,21 @@ function tabHasStatus(
   if (agentStatusPaneIds && agentStatusPaneIds.size > 0) {
     return false
   }
-  return classifyTitleActivity(tab.title) === status && titleStatusIsAgentAttributable(tab.title)
+  return (
+    classifyTitleActivity(tab.title) === status &&
+    titleStatusIsAgentAttributable(tab.title, tab.launchAgent)
+  )
 }
 
 // Why: require agent attribution so a bare never-cleared spinner title can't spin the dot "0 agents" forever with no matching sidebar row.
-function titleStatusIsAgentAttributable(title: string): boolean {
-  return resolveAgentTypeFromTerminalTitle(title) !== null
+function titleStatusIsAgentAttributable(title: string, launchAgent?: TuiAgent | null): boolean {
+  if (resolveAgentTypeFromTerminalTitle(title) !== null) {
+    return true
+  }
+  // Why: a spinner proves activity but not identity (Claude's thinking title has no provider
+  // token, #9040); the tab's launch identity supplies it, mirroring the row builder's spinner
+  // fallback (#9647) so the dot and the sidebar row agree.
+  return containsAgentSpinnerGlyph(title) && Boolean(launchAgent)
 }
 
 export function getWorktreeStatusLabel(status: WorktreeStatus): string {
@@ -100,8 +126,7 @@ export function getWorktreeStatusLabel(status: WorktreeStatus): string {
 }
 
 /**
- * Apply the WorktreeCard priority overlay (permission > working > done >
- * heuristic) on top of the title-heuristic base. Explicit agent rows may
+ * Apply the WorktreeCard priority overlay on top of the title-heuristic base. Explicit agent rows may
  * promote the dot; sleep cleanup owns removing stale retained rows.
  *
  * Map args are narrowed to this worktree. `hasPermission`/`hasLiveWorking`/
@@ -109,7 +134,7 @@ export function getWorktreeStatusLabel(status: WorktreeStatus): string {
  * `hasRetainedDone` is a retained-agent snapshot scoped to this worktreeId.
  */
 export function resolveWorktreeStatus(args: {
-  tabs: readonly Pick<TerminalTab, 'id' | 'title'>[]
+  tabs: readonly Pick<TerminalTab, 'id' | 'title' | 'launchAgent'>[]
   browserTabs: readonly { id: string }[]
   ptyIdsByTabId: Record<string, string[]>
   runtimePaneTitlesByTabId?: Record<string, Record<number, string>>
@@ -118,6 +143,8 @@ export function resolveWorktreeStatus(args: {
   terminalLayoutRootsByTabId?: Record<string, TerminalPaneLayoutNode | null | undefined>
   hasPermission: boolean
   hasLiveWorking: boolean
+  hasLiveMonitoring?: boolean
+  hasInterrupted?: boolean
   hasLiveDone: boolean
   hasRetainedDone: boolean
 }): WorktreeStatus {
@@ -142,6 +169,13 @@ export function resolveWorktreeStatus(args: {
   // Why: restored cards get the hook snapshot before panes mount; trust the explicit working row so they stay yellow on restart.
   if (args.hasLiveWorking || heuristic === 'working') {
     return 'working'
+  }
+  if (args.hasLiveMonitoring || heuristic === 'monitoring') {
+    return 'monitoring'
+  }
+  // Terminal outcomes follow live states, but an interrupted outcome must not collapse into success.
+  if (args.hasInterrupted) {
+    return 'interrupted'
   }
   if (args.hasLiveDone || args.hasRetainedDone) {
     return 'done'

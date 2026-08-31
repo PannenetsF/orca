@@ -8,6 +8,7 @@ const MOBILE_DYNAMIC_RPC_METHODS = [
   // mobile source scan below, but still must stay mobile-authorized.
   'accounts.selectClaude',
   'accounts.selectCodex',
+  'accounts.selectCodexForTarget',
   'terminal.createAgentSession',
   'terminal.ensureAgentSession',
   'github.updateIssue',
@@ -94,7 +95,10 @@ function mobileRpcMethods(): string[] {
 }
 
 function mobileRpcAllowlist(): Set<string> {
-  const source = readFileSync(join(process.cwd(), 'src/main/runtime/runtime-rpc.ts'), 'utf8')
+  const source = readFileSync(
+    join(process.cwd(), 'src/main/runtime/runtime-rpc/runtime-rpc-mobile-method-allowlist.ts'),
+    'utf8'
+  )
   const allowlist = source.match(/const MOBILE_RPC_METHOD_ALLOWLIST = new Set\(\[([\s\S]*?)\]\)/)
   if (!allowlist) {
     throw new Error('MOBILE_RPC_METHOD_ALLOWLIST not found')
@@ -138,6 +142,12 @@ describe('mobile RPC allowlist', () => {
       ['updater.getStatus', 'updater.check', 'updater.download', 'updater.install'].filter(
         (method) => allowed.has(method)
       )
+    ).toEqual([])
+  })
+
+  it('does not expose structured agent sessions to mobile credentials', () => {
+    expect(
+      [...mobileRpcAllowlist()].filter((method) => method.startsWith('agentSession.'))
     ).toEqual([])
   })
 })

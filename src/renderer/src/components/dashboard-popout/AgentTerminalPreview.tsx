@@ -1,36 +1,38 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { buildDefaultTerminalOptions } from '@/lib/pane-manager/pane-terminal-options'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { subscribeToTerminalUserInput } from '@/components/terminal-pane/terminal-user-input-signal'
-import {
-  executeTerminalPastePlan,
-  planTerminalPasteWithYield
-} from '@/components/terminal-pane/terminal-paste-coordinator'
-import { resolveTerminalPasteRuntime } from '@/components/terminal-pane/terminal-paste-runtime'
-import { TERMINAL_PASTE_MAX_BYTES } from '@/components/terminal-pane/terminal-paste-limits'
-import {
-  installTerminalImeCompositionTracker,
-  type TerminalImeCompositionTracker
-} from '@/components/terminal-pane/terminal-ime-composition-tracker'
-import {
-  installTerminalImeNativeTextForwarder,
-  type TerminalImeNativeTextForwarder
-} from '@/components/terminal-pane/terminal-ime-native-text-forwarder'
-import { getMacNativeTextInputSourceTracker } from '@/components/terminal-pane/terminal-ime-input-source'
 import { composeActiveTerminalTheme } from '@/components/terminal-pane/terminal-appearance'
-import { resolveTerminalMinimumContrastRatio } from '@/lib/terminal-contrast-correction'
 import { useSystemPrefersDark } from '@/components/terminal-pane/use-system-prefers-dark'
+import { TerminalKittyKeyboardModeTracker } from '../../../../shared/terminal-kitty-keyboard-mode-tracker'
+import { replayPreviewConnectionSnapshot } from './preview-terminal-snapshot-replay'
+import { useEffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/use-effective-mac-option-as-alt'
+import {
+  buildPreviewAppearanceOptions,
+  buildPreviewTerminalOptions
+} from './preview-terminal-options'
+import { syncPreviewTerminalLigatures } from './preview-terminal-ligatures'
+import { installPreviewTerminalCompatibility } from './preview-terminal-compatibility'
+import { createPreviewClipboardPaster } from './preview-terminal-paste'
+import { installPreviewImeBridge, type PreviewImeBridge } from './preview-terminal-ime-bridge'
+import type { DashboardCardTerminalInput } from '../../../../shared/dashboard-snapshot'
 import { translate } from '@/i18n/i18n'
 import { getBuiltinTheme, resolveEffectiveTerminalAppearance } from '@/lib/terminal-theme'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
-import { installPreviewClipboardShortcuts } from './preview-clipboard-shortcuts'
+import { installPreviewTerminalKeyHandler } from './preview-terminal-key-handler'
 import { createPreviewGridClaim } from './preview-grid-claim'
+import { createPreviewBoxFit } from './preview-terminal-box-fit'
+import { installPreviewTerminalAppMenuClipboard } from './preview-terminal-app-menu-clipboard'
+import { installPreviewTerminalRightClickPaste } from './preview-terminal-right-click-paste'
+import { isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
 import type { TerminalPreviewDataPayload } from '../../../../shared/terminal-preview'
 
 const PREVIEW_SCROLLBACK_ROWS = 24
+// Why: main only ever serializes PREVIEW_SCROLLBACK_ROWS of history into this
+// terminal, so the pane's user-configured scrollback would only cost memory.
+const PREVIEW_SCROLLBACK_BUFFER_ROWS = 1000
 const FALLBACK_COLS = 80
 const FALLBACK_ROWS = 24
 const RESYNC_RETRY_DELAY_MS = 150
@@ -44,16 +46,30 @@ function clamp(value: number, min: number, max: number): number {
  * process's per-PTY headless emulator. On open it claims the PTY grid for the
  * dialog's own box (see createPreviewGridClaim), so the terminal renders
  * properly sized rather than scaled. The terminal itself is always created at
- * the PTY's REAL cols/rows — serialized ANSI replayed into different
- * dimensions rewraps into garbage — and when someone else owns the grid (a
- * phone, a host reclaim) the oversized frame is scaled down to fit and
- * anchored so the cursor stays visible. Keystrokes pass through to the PTY;
- * DOM renderer so it never grabs a WebGL context.
+ * the PTY's REAL cols/rows, and when someone else owns the grid (a phone, a
+ * host reclaim) createPreviewBoxFit scales the oversized frame down. Keystrokes
+ * pass through to the PTY; DOM renderer so it never grabs a WebGL context.
  */
-export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.Element {
+export function AgentTerminalPreview({
+  ptyId,
+  terminalInput = null,
+  className
+}: {
+  ptyId: string
+  /** Host-input facts relayed with the card; null routes bytes by client OS. */
+  terminalInput?: DashboardCardTerminalInput | null
+  className?: string
+}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
   const settings = useAppStore((state) => state.settings)
   const systemPrefersDark = useSystemPrefersDark()
+  const macOptionAsAlt = useEffectiveMacOptionAsAlt(settings?.terminalMacOptionAsAlt)
+  // Why: keys and appearance must read live values without remounting the
+  // terminal (a remount reconnects the pty and repaints from a new snapshot).
+  const settingsRef = useRef(settings)
+  const macOptionAsAltRef = useRef(macOptionAsAlt)
+  const terminalInputRef = useRef(terminalInput)
   const { terminalTheme, terminalMode } = useMemo(() => {
     if (!settings) {
       return { terminalTheme: null, terminalMode: 'dark' as const }
@@ -69,6 +85,16 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
   // spawned this session) — say so instead of painting a silent blank terminal.
   const [ptyGone, setPtyGone] = useState(false)
 
+  // Why: refs are seeded at first render and refreshed on commit — assigning
+  // during render trips react-compiler. Layout, not passive: xterm's keydown is
+  // a native listener, so React would not flush a passive effect before the
+  // next keystroke and a just-relayed profile could miss it.
+  useLayoutEffect(() => {
+    settingsRef.current = settings
+    macOptionAsAltRef.current = macOptionAsAlt
+    terminalInputRef.current = terminalInput
+  }, [settings, macOptionAsAlt, terminalInput])
+
   useEffect(() => {
     setPtyGone(false)
     const container = containerRef.current
@@ -79,43 +105,19 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
     let terminal: Terminal | null = null
     let offData: (() => void) | null = null
     let userInputDisposable: { dispose: () => void } | null = null
-    let imeCompositionTracker: TerminalImeCompositionTracker | null = null
-    let imeNativeTextForwarder: TerminalImeNativeTextForwarder | null = null
+    let imeBridge: PreviewImeBridge | null = null
+    let disposeKeyHandler: (() => void) | null = null
+    let disposeTerminalCompatibility: (() => void) | null = null
+    // Why: mirrors the pane's tracker — the policy needs the flags the TUI
+    // negotiated, and this preview parses the same output stream the pane does.
+    const kittyKeyboardModes = new TerminalKittyKeyboardModeTracker()
     let refreshInFlight = false
     let refreshAgain = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     const pendingLivePayloads: Extract<TerminalPreviewDataPayload, { type: 'data' }>[] = []
 
-    const fitToBox = (): void => {
-      const screen = container.querySelector<HTMLElement>('.xterm-screen')
-      const box = container.parentElement
-      if (!screen || !box || !terminal) {
-        return
-      }
-      const scale = Math.min(1, box.clientWidth / Math.max(1, screen.offsetWidth))
-      container.style.transform = scale < 1 ? `scale(${scale})` : ''
-      // Anchor whichever end keeps the CURSOR row in view when the terminal is
-      // taller than the box: a fresh shell prompts at the TOP of its screen
-      // (blind bottom-anchoring clipped it away), while a busy TUI keeps its
-      // action at the bottom.
-      const cellHeight = screen.offsetHeight / Math.max(1, terminal.rows)
-      const cursorBottom = (terminal.buffer.active.cursorY + 1) * cellHeight * scale
-      const anchorTop = cursorBottom <= box.clientHeight
-      box.style.alignItems = anchorTop ? 'flex-start' : 'flex-end'
-      container.style.transformOrigin = anchorTop ? 'top left' : 'bottom left'
-    }
-    // Re-fit after every parsed write (cursor may move ends); rAF coalesces.
-    let fitScheduled = false
-    const scheduleFit = (): void => {
-      if (fitScheduled) {
-        return
-      }
-      fitScheduled = true
-      requestAnimationFrame(() => {
-        fitScheduled = false
-        fitToBox()
-      })
-    }
+    const boxFit = createPreviewBoxFit({ container, getTerminal: () => terminal })
+    const scheduleFit = boxFit.schedule
 
     const gridClaim = createPreviewGridClaim({
       ptyId,
@@ -136,7 +138,14 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
     boxResizeObserver?.observe(container)
 
     let replayDepth = 0
-    const writeReplayed = (chunk: string, onDone?: () => void): void => {
+    const writeReplayed = (chunk: string, onDone?: () => void, live = false): void => {
+      // Why: a redelivered snapshot repeats the TUI's one-time kitty push, so
+      // replayed bytes must apply as idempotent sets (see the tracker's docs).
+      if (live) {
+        kittyKeyboardModes.scan(chunk)
+      } else {
+        kittyKeyboardModes.scanReplay(chunk)
+      }
       replayDepth++
       terminal?.write(chunk, () => {
         replayDepth--
@@ -150,93 +159,68 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
         pendingLivePayloads.push(payload)
         return
       }
-      writeReplayed(payload.data, () => {
-        if (!disposed) {
-          void window.api.terminalPreview.ack(ptyId, payload.bytes)
-        }
-      })
+      writeReplayed(
+        payload.data,
+        () => {
+          if (!disposed) {
+            void window.api.terminalPreview.ack(ptyId, payload.bytes)
+          }
+        },
+        true
+      )
     }
 
-    const pasteClipboardText = async (
-      activeElementAtDispatch: Element | null,
-      source: 'keyboard' | 'app-menu'
-    ): Promise<void> => {
-      let text: string
-      try {
-        text = await window.api.ui.readClipboardText({ maxBytes: TERMINAL_PASTE_MAX_BYTES })
-      } catch {
-        return
-      }
-      const pasteTerminal = terminal
-      if (!pasteTerminal || !text) {
-        return
-      }
-      const targetIsCurrent = (): boolean =>
-        !disposed &&
-        terminal === pasteTerminal &&
-        activeElementAtDispatch !== null &&
-        document.activeElement === activeElementAtDispatch &&
-        container.contains(activeElementAtDispatch)
-      if (!targetIsCurrent()) {
-        return
-      }
-      const platform = getShortcutPlatform()
-      const plan = await planTerminalPasteWithYield({
-        text,
-        source,
-        target: {
-          kind: 'terminal',
-          paneId: 0,
-          leafId: ptyId,
-          ptyId,
-          runtime: resolveTerminalPasteRuntime({ platform, ptyId })
-        },
-        terminalBracketedPasteMode: pasteTerminal.modes.bracketedPasteMode
-      })
-      await executeTerminalPastePlan(plan, {
-        // Why: stream large pastes so the renderer never emits one huge IPC payload.
-        pasteText: (pasteText) => pasteTerminal.paste(pasteText),
-        writePty: (data) => window.api.terminalPreview.input(ptyId, data),
-        isTargetCurrent: targetIsCurrent,
-        // Why: if focus changes mid-bracketed paste, the closing marker must still reach the live PTY.
-        canContinue: () => true
-      })
-    }
+    const pasteClipboardText = createPreviewClipboardPaster({
+      ptyId,
+      container,
+      getTerminal: () => terminal,
+      getTerminalInput: () => terminalInputRef.current,
+      isDisposed: () => disposed
+    })
 
     const disposeImeNativeTextBridge = (): void => {
-      imeNativeTextForwarder?.dispose()
-      imeNativeTextForwarder = null
-      imeCompositionTracker?.dispose()
-      imeCompositionTracker = null
+      imeBridge?.dispose()
+      imeBridge = null
     }
 
-    // Why: xterm's kitty encoder can encode+cancel a printable keydown before
-    // Chromium commits IME/native text, silently dropping the glyph (mirrors
-    // TerminalPane's forwarder; macOS-only like the pane's install).
     const installImeNativeTextBridge = (): void => {
-      if (!terminal || getShortcutPlatform() !== 'darwin') {
-        return
+      if (terminal) {
+        // Why a live getter: kitty state can change between keydown and commit,
+        // and the tracker outlives every reconnect inside this effect.
+        imeBridge = installPreviewImeBridge(terminal, {
+          getKittyKeyboardFlags: () => kittyKeyboardModes.flags
+        })
       }
-      // Why: prewarm the async input-source lookup before the first native-text key needs classification.
-      const inputSourceTracker = getMacNativeTextInputSourceTracker()
-      imeCompositionTracker = installTerminalImeCompositionTracker(terminal.element)
-      imeNativeTextForwarder = installTerminalImeNativeTextForwarder({
-        terminalElement: terminal.element,
-        isComposing: () => imeCompositionTracker?.isActive() ?? false,
-        sendInput: (data) => terminal?.input(data),
-        getInputSourceFeatures: () => inputSourceTracker.getFeatures()
-      })
     }
 
-    const installClipboardShortcuts = (): void => {
+    const installKeyHandler = (): void => {
       if (!terminal) {
         return
       }
-      installPreviewClipboardShortcuts({
+      disposeKeyHandler = installPreviewTerminalKeyHandler({
         terminal,
-        claimImeKeyEvent: (event) => imeNativeTextForwarder?.claimKeyEvent(event) ?? false,
+        claimImeKeyEvent: (event) => imeBridge?.claimKeyEvent(event) ?? false,
         pasteClipboardText: (activeElement, source) =>
-          void pasteClipboardText(activeElement, source)
+          void pasteClipboardText(activeElement, source),
+        // Why: route through terminal.input so the chord's bytes carry core's user-input signal, like typed keys.
+        sendInput: (data) => terminal?.input(data),
+        getShortcutContext: () => ({
+          clientPlatform: getShortcutPlatform(),
+          macOptionAsAlt: macOptionAsAltRef.current,
+          keybindings: useAppStore.getState().keybindings,
+          terminalInput: terminalInputRef.current,
+          getKittyKeyboardFlags: () => kittyKeyboardModes.flags,
+          terminalShortcutPolicy: settingsRef.current?.terminalShortcutPolicy
+        })
+      })
+    }
+
+    const installTerminalCompatibility = (): void => {
+      if (!terminal) {
+        return
+      }
+      disposeTerminalCompatibility = installPreviewTerminalCompatibility(terminal, {
+        getSettings: () => settingsRef.current
       })
     }
 
@@ -268,17 +252,18 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
     ): void => {
       const snap = connection.snapshot!
       if (!terminal) {
-        terminal = new Terminal({
-          ...buildDefaultTerminalOptions(),
-          cols: clamp(snap.cols ?? FALLBACK_COLS, 2, 500),
-          rows: clamp(snap.rows ?? FALLBACK_ROWS, 2, 200),
-          theme: terminalTheme ?? undefined,
-          minimumContrastRatio: resolveTerminalMinimumContrastRatio(
-            terminalTheme?.background,
-            terminalMode
-          ),
-          scrollback: 1000
-        })
+        terminal = new Terminal(
+          buildPreviewTerminalOptions({
+            settings: settingsRef.current,
+            terminalInput: terminalInputRef.current,
+            macOptionIsMeta: macOptionAsAltRef.current === 'true',
+            theme: terminalTheme,
+            themeMode: terminalMode,
+            cols: clamp(snap.cols ?? FALLBACK_COLS, 2, 500),
+            rows: clamp(snap.rows ?? FALLBACK_ROWS, 2, 200),
+            scrollback: PREVIEW_SCROLLBACK_BUFFER_ROWS
+          })
+        )
         try {
           terminal.open(container)
         } catch {
@@ -286,9 +271,11 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
           terminal = null
           return
         }
+        terminalRef.current = terminal
+        installTerminalCompatibility()
         installInputRouting()
         installImeNativeTextBridge()
-        installClipboardShortcuts()
+        installKeyHandler()
       } else if (replaceExisting) {
         // Why: keep the old frame visible during capture, then atomically replace it once the authoritative snapshot arrives.
         terminal.resize(
@@ -297,18 +284,12 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
         )
         terminal.reset()
       }
-      if (snap.scrollbackAnsi) {
-        writeReplayed(snap.scrollbackAnsi)
-      }
-      if (snap.data) {
-        writeReplayed(snap.data)
-      }
-      if (snap.pendingEscapeTailAnsi) {
-        writeReplayed(snap.pendingEscapeTailAnsi)
-      }
-      for (const data of connection.replay) {
-        writeReplayed(data)
-      }
+      replayPreviewConnectionSnapshot({
+        snapshot: snap,
+        replay: connection.replay,
+        kittyKeyboardModes,
+        write: (chunk, live) => writeReplayed(chunk, undefined, live)
+      })
       for (const payload of pendingLivePayloads.splice(0)) {
         writeLive(payload)
       }
@@ -355,8 +336,13 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
         userInputDisposable?.dispose()
         userInputDisposable = null
         disposeImeNativeTextBridge()
+        disposeTerminalCompatibility?.()
+        disposeTerminalCompatibility = null
+        disposeKeyHandler?.()
+        disposeKeyHandler = null
         terminal?.dispose()
         terminal = null
+        terminalRef.current = null
         void window.api.terminalPreview.unsubscribe(ptyId)
         return
       }
@@ -368,14 +354,18 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
       replayConnection(connection, replaceExisting, () => void setup(true))
     }
 
-    // Why: the popout has no TerminalPane/useAppMenuPaste, so the Edit menu's
-    // Cmd/Ctrl+V (routed to the focused window as ui:appMenuPaste) would
-    // otherwise be dropped and paste would silently do nothing here.
-    const offAppMenuPaste = window.api.ui.onAppMenuPaste(() => {
-      const active = document.activeElement
-      if (active && container.contains(active)) {
-        void pasteClipboardText(active, 'app-menu')
-      }
+    const disposeAppMenuClipboard = installPreviewTerminalAppMenuClipboard({
+      container,
+      getTerminal: () => terminal,
+      pasteClipboardText: (activeElement, source) => void pasteClipboardText(activeElement, source)
+    })
+    const disposeRightClickPaste = installPreviewTerminalRightClickPaste({
+      container,
+      getTerminal: () => terminal,
+      // Same default as the pane: Windows users expect terminal-style right-click.
+      isRightClickToPasteEnabled: () =>
+        settingsRef.current?.terminalRightClickToPaste ?? isWindowsUserAgent(),
+      pasteClipboardText: (activeElement, source) => void pasteClipboardText(activeElement, source)
     })
 
     offData = window.api.terminalPreview.onData((payload) => {
@@ -398,22 +388,44 @@ export function AgentTerminalPreview({ ptyId }: { ptyId: string }): React.JSX.El
       }
       gridClaim.dispose()
       boxResizeObserver?.disconnect()
-      offAppMenuPaste()
+      disposeAppMenuClipboard()
+      disposeRightClickPaste()
       offData?.()
       userInputDisposable?.dispose()
       disposeImeNativeTextBridge()
+      disposeTerminalCompatibility?.()
+      disposeKeyHandler?.()
       void window.api.terminalPreview.unsubscribe(ptyId)
       terminal?.dispose()
+      terminalRef.current = null
     }
   }, [ptyId, terminalTheme, terminalMode])
+
+  // Why: appearance settings must land on the open terminal, and the OS input
+  // source can flip Option-as-Alt with no settings change at all. A remount
+  // would reconnect the pty and repaint the agent's screen from a new snapshot.
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) {
+      return
+    }
+    Object.assign(
+      terminal.options,
+      buildPreviewAppearanceOptions(settings, macOptionAsAlt === 'true')
+    )
+    syncPreviewTerminalLigatures(terminal, settings)
+  }, [settings, macOptionAsAlt])
 
   return (
     // Why: a size FIXED by the viewport (not shrink-to-fit) + overflow-hidden
     // keeps the dialog stable no matter how wide/tall the pane's serialized
     // buffer is. The terminal keeps the pane's true dimensions and is scaled/
-    // clipped to fit; fitToBox anchors whichever end keeps the cursor in view.
+    // clipped to fit; createPreviewBoxFit anchors the end that shows the cursor.
     <div
-      className="relative h-[calc(100vh-140px)] w-full overflow-hidden bg-background p-1.5"
+      className={cn(
+        'relative h-[calc(100vh-140px)] w-full overflow-hidden bg-background p-1.5',
+        className
+      )}
       style={terminalTheme?.background ? { backgroundColor: terminalTheme.background } : undefined}
     >
       {ptyGone ? (

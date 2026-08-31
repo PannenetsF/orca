@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getVersionManagerBinPaths } from '../codex-cli/command'
 import { getMainE2EConfig } from '../e2e-config'
+import { DISABLED_CHROMIUM_FEATURES } from './disabled-chromium-features'
 
 const DEV_PARENT_SHUTDOWN_GRACE_MS = 3000
 const HTTP1_COMPATIBILITY_ENV_VAR = 'ORCA_DISABLE_HTTP2'
@@ -66,6 +67,26 @@ export function configureElectronNetworkCompatibility(
   app.commandLine.appendSwitch('disable-http2')
 }
 
+export function disableUnsupportedChromiumFeatures(): void {
+  appendDisabledChromiumFeatures([...DISABLED_CHROMIUM_FEATURES])
+}
+
+// Why: Chromium clamps hidden-page timers to 1/min after 5min on every desktop platform,
+// delaying agent-done/bell notifications ~60s. Call site is unconditional (see index.ts).
+export function optOutOfHiddenPageWakeUpThrottling(): void {
+  appendDisabledChromiumFeatures(['IntensiveWakeUpThrottling'])
+}
+
+function appendDisabledChromiumFeatures(features: string[]): void {
+  const existingFeatures = app.commandLine
+    .getSwitchValue('disable-features')
+    .split(',')
+    .map((feature) => feature.trim())
+    .filter(Boolean)
+  const disabledFeatures = Array.from(new Set([...features, ...existingFeatures])).join(',')
+  app.commandLine.appendSwitch('disable-features', disabledFeatures)
+}
+
 function getProcessPathDelimiter(): string {
   return process.platform === 'win32' ? ';' : ':'
 }
@@ -99,15 +120,14 @@ export function patchPackagedProcessPath(): void {
   const extraPaths: string[] = []
 
   if (process.platform !== 'win32') {
-    extraPaths.push(
-      '/opt/homebrew/bin',
-      '/opt/homebrew/sbin',
-      '/usr/local/bin',
-      '/usr/local/sbin',
-      '/snap/bin',
-      '/home/linuxbrew/.linuxbrew/bin',
-      '/nix/var/nix/profiles/default/bin'
-    )
+    extraPaths.push('/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin')
+
+    if (process.platform === 'linux') {
+      // Why: snap and Linuxbrew ship on Linux only, so seeding them elsewhere adds phantom PATH entries every spawn must stat.
+      extraPaths.push('/snap/bin', '/home/linuxbrew/.linuxbrew/bin')
+    }
+
+    extraPaths.push('/nix/var/nix/profiles/default/bin')
 
     if (home) {
       extraPaths.push(
@@ -262,6 +282,13 @@ export function enableMainProcessGpuFeatures(): void {
     return
   }
 
+  if (process.platform === 'darwin') {
+    // Why: Graphite can strand corrupt Metal tiles after idle; Ganesh preserves GPU compositing without the stale surface.
+    // Reached on every macOS launch only because GPU fallback skips this function and is win32-only; if fallback ever
+    // reaches macOS this must move out of this path or Macs silently lose the fix.
+    app.commandLine.appendSwitch('disable-skia-graphite')
+  }
+
   // Why: Blink evicts the oldest WebGL context past 16/renderer and each terminal pane holds one, silently downgrading panes to DOM.
   // 128 raises the ceiling for real layouts while staying bounded so context leaks still surface.
   app.commandLine.appendSwitch('max-active-webgl-contexts', '128')
@@ -293,12 +320,4 @@ export function enableMainProcessGpuFeatures(): void {
   if (features) {
     app.commandLine.appendSwitch('enable-features', features)
   }
-
-  const existingDisabledFeatures = app.commandLine.getSwitchValue('disable-features')
-  // Why: IntensiveWakeUpThrottling clamps hidden-page timers to 1/min after 5min, delaying agent-done/bell notifications ~60s.
-  // This opt-out is skipped under GPU fallback (win32-only today); if throttling ever reaches Windows it must move out of this path.
-  const disabledFeatures = ['IntensiveWakeUpThrottling', existingDisabledFeatures]
-    .filter(Boolean)
-    .join(',')
-  app.commandLine.appendSwitch('disable-features', disabledFeatures)
 }
