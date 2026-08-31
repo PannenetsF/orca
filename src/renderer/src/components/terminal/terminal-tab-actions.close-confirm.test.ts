@@ -63,6 +63,9 @@ function makePinnedTabState(
     closeUnifiedTab: vi.fn(),
     setActiveTab: vi.fn(),
     setActiveWorktree: vi.fn(),
+    // Why: main's close path lands an emptied worktree via reconcileWorktreeTabModel;
+    // these tests assert confirm gating, not landing, so report a non-empty count.
+    reconcileWorktreeTabModel: vi.fn(() => ({ renderableTabCount: 1 })),
     requestPinnedTabCloseConfirm: vi.fn(),
     ...rest
   }
