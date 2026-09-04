@@ -14,13 +14,26 @@ export function installPreviewTerminalLinks(terminal: Terminal): void {
   // and kills the renderer — guard before any provider registers.
   installGuardedLinkProviderRegistration(terminal)
   terminal.loadAddon(
-    new WebLinksAddon((event, uri) => {
-      if (!isTerminalHttpLinkActivation(event)) {
-        return
-      }
-      event.preventDefault()
-      void window.api.shell.openUrl(uri).catch(() => undefined)
-      terminal.clearSelection()
-    })
+    new WebLinksAddon((event, uri) => openPreviewHttpLink(terminal, event, uri))
   )
+  // Why: OSC 8 hyperlinks bypass WebLinksAddon and hit xterm core's
+  // OscLinkProvider, whose default handler shows a confirm dialog and then
+  // window.open()s — a dead end in Electron that never reaches the browser.
+  terminal.options.linkHandler = {
+    allowNonHttpProtocols: false,
+    activate: (event, text) => openPreviewHttpLink(terminal, event, text)
+  }
+}
+
+function openPreviewHttpLink(
+  terminal: Terminal,
+  event: MouseEvent | undefined,
+  uri: string
+): void {
+  if (!event || !isTerminalHttpLinkActivation(event)) {
+    return
+  }
+  event.preventDefault()
+  void window.api.shell.openUrl(uri).catch(() => undefined)
+  terminal.clearSelection()
 }

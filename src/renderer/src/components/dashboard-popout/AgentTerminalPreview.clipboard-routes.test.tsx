@@ -82,6 +82,8 @@ vi.mock('@xterm/xterm', () => ({
     })
     element = document.createElement('div')
     unicode = { activeVersion: '6', versions: ['6', '11'], register: vi.fn() }
+    options = {}
+    registerLinkProvider = vi.fn()
     loadAddon = vi.fn()
     attachCustomWheelEventHandler = vi.fn()
     scrollToTop = vi.fn()
