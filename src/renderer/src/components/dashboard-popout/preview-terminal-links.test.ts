@@ -18,6 +18,7 @@ type FakeTerminal = {
   clearSelection: ReturnType<typeof vi.fn>
 }
 
+/** Minimal Terminal surface the installer touches; the guard skips stubs without registerLinkProvider. */
 function createFakeTerminal(): FakeTerminal {
   return {
     loadAddon: vi.fn(),
@@ -27,6 +28,7 @@ function createFakeTerminal(): FakeTerminal {
   }
 }
 
+/** The click handler the most recent WebLinksAddon instance was constructed with. */
 function webLinksHandler(): (event: MouseEvent | undefined, uri: string) => void {
   const instance = vi.mocked(WebLinksAddon).mock.instances.at(-1) as { handler?: unknown }
   return instance.handler as (event: MouseEvent | undefined, uri: string) => void

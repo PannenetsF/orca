@@ -25,6 +25,7 @@ export function installPreviewTerminalLinks(terminal: Terminal): void {
   }
 }
 
+/** Shared opener for both link routes: Mod+click only, then the system browser. */
 function openPreviewHttpLink(
   terminal: Terminal,
   event: MouseEvent | undefined,
