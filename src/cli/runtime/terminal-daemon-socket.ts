@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { PROTOCOL_VERSION } from '../../main/daemon/daemon-protocol-version'
 import { getDaemonSocketPath, getDaemonTokenPath } from '../../main/daemon/daemon-spawner'
 import { NOTIFY_PREFIX, type RpcResponse } from '../../main/daemon/types'
@@ -30,7 +31,10 @@ function nextMessageReader(socket: Socket): (timeoutMs?: number) => Promise<unkn
     }
   }
   const parser = createNdjsonParser(deliver, (err) => socket.destroy(err))
-  socket.on('data', (chunk: Buffer) => parser.feed(chunk.toString('utf8')))
+  // Why: decode across chunk boundaries so a multibyte UTF-8 sequence split by a
+  // socket read isn't emitted as U+FFFD (matches the daemon's own readers).
+  const decoder = new StringDecoder('utf8')
+  socket.on('data', (chunk: Buffer) => parser.feed(decoder.write(chunk)))
   // Why: post-connect errors surface as 'close'; an unhandled 'error' would crash the process.
   socket.on('error', () => {})
   socket.once('close', () => {
@@ -84,6 +88,8 @@ function describeConnectError(err: unknown, socketPath: string): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
+type DaemonIdentity = { pid?: number; startedAtMs?: number; launchNonce?: string }
+
 async function sendHello(
   socket: Socket,
   token: string,
@@ -91,11 +97,28 @@ async function sendHello(
   role: 'control' | 'stream',
   nextMessage: (timeoutMs?: number) => Promise<unknown>,
   timeoutMs: number
-): Promise<void> {
+): Promise<DaemonIdentity | undefined> {
   socket.write(encodeNdjson({ type: 'hello', version: PROTOCOL_VERSION, token, clientId, role }))
-  const response = (await nextMessage(timeoutMs)) as { ok?: boolean; error?: string } | undefined
+  const response = (await nextMessage(timeoutMs)) as
+    | { ok?: boolean; error?: string; daemonIdentity?: DaemonIdentity }
+    | undefined
   if (response?.ok !== true) {
     throw new Error(`Daemon rejected ${role} handshake: ${response?.error ?? 'unknown error'}`)
+  }
+  return response.daemonIdentity
+}
+
+// Why: a daemon replaced between the two connects would leave control and stream
+// talking to different processes; the launchNonce is unique per daemon lifetime.
+function assertSameDaemon(control?: DaemonIdentity, stream?: DaemonIdentity): void {
+  if (
+    control?.launchNonce !== undefined &&
+    stream?.launchNonce !== undefined &&
+    control.launchNonce !== stream.launchNonce
+  ) {
+    throw new Error(
+      'Orca daemon was replaced mid-handshake; control and stream sockets reached different daemons. Retry.'
+    )
   }
 }
 
@@ -119,11 +142,26 @@ export class TerminalDaemonConnection {
       throw describeConnectError(err, socketPath)
     })
     const nextControlMessage = nextMessageReader(control)
-    await sendHello(control, token, clientId, 'control', nextControlMessage, HANDSHAKE_TIMEOUT_MS)
+    const controlIdentity = await sendHello(
+      control,
+      token,
+      clientId,
+      'control',
+      nextControlMessage,
+      HANDSHAKE_TIMEOUT_MS
+    )
     // Why: the daemon silently drops a stream socket connected before the control handshake completes.
     const stream = await openSocket(socketPath, HANDSHAKE_TIMEOUT_MS)
     const nextStreamMessage = nextMessageReader(stream)
-    await sendHello(stream, token, clientId, 'stream', nextStreamMessage, HANDSHAKE_TIMEOUT_MS)
+    const streamIdentity = await sendHello(
+      stream,
+      token,
+      clientId,
+      'stream',
+      nextStreamMessage,
+      HANDSHAKE_TIMEOUT_MS
+    )
+    assertSameDaemon(controlIdentity, streamIdentity)
     return new TerminalDaemonConnection(control, stream, nextControlMessage, nextStreamMessage)
   }
 

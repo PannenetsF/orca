@@ -130,7 +130,7 @@ export async function attachToTerminalDaemon(
 }
 
 // Why: Ctrl-\ is the detach prefix; a following q detaches, anything else forwards the swallowed byte.
-function scanForDetach(
+export function scanForDetach(
   chunk: Buffer,
   prefixPending: boolean
 ): { bytes: number[]; detached: boolean; prefixPending: boolean } {
