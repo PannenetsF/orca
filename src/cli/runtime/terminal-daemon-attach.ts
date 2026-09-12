@@ -46,20 +46,25 @@ export async function attachToTerminalDaemon(
     })
     renderSnapshot(attach.snapshot)
 
-    connection.onEvent((raw) => {
-      const event = raw as DaemonEvent
-      if (event.sessionId !== sessionId) {
-        return
-      }
-      if (event.event === 'data') {
-        process.stdout.write(event.payload.data)
-      } else if (event.event === 'exit') {
-        endBridge({ kind: 'exit', code: event.payload.code ?? null })
-      }
-      // Why: terminalError/backgroundMarker/dataGap/transientFact are diagnostics; an attached viewer ignores them.
-    })
+    connection.onEvent(
+      (raw) => {
+        const event = raw as DaemonEvent
+        if (event.sessionId !== sessionId) {
+          return
+        }
+        if (event.event === 'data') {
+          process.stdout.write(event.payload.data)
+        } else if (event.event === 'exit') {
+          endBridge({ kind: 'exit', code: event.payload.code ?? null })
+        }
+        // Why: terminalError/backgroundMarker/dataGap/transientFact are diagnostics; an attached viewer ignores them.
+      },
+      // Why: the daemon dropped our stream (session gone / daemon exit); settle
+      // the bridge so teardown runs instead of awaiting forever.
+      () => endBridge({ kind: 'exit', code: null })
+    )
 
-    const restoreTty = enterRawMode(options.readOnly)
+    const restoreTty = enterRawMode()
     teardown.push(restoreTty)
     let detachPrefixPending = false
     const onStdinData = (chunk: Buffer): void => {
@@ -69,7 +74,8 @@ export async function attachToTerminalDaemon(
         endBridge({ kind: 'detach' })
         return
       }
-      if (scan.bytes.length > 0) {
+      // Why: read-only still scans for the detach key but never writes to the PTY.
+      if (!options.readOnly && scan.bytes.length > 0) {
         connection.notify('write', { sessionId, data: Buffer.from(scan.bytes).toString('utf8') })
       }
     }
@@ -80,7 +86,9 @@ export async function attachToTerminalDaemon(
       }
     }
     const onSignal = (): void => endBridge({ kind: 'detach' })
-    if (!options.readOnly) {
+    // Why: read stdin in both modes so Ctrl-\ q always detaches; only the PTY
+    // write and resize are suppressed under --read-only.
+    if (process.stdin.isTTY) {
       process.stdin.on('data', onStdinData)
       teardown.push(() => {
         process.stdin.removeListener('data', onStdinData)
@@ -88,6 +96,8 @@ export async function attachToTerminalDaemon(
         // process hangs after detach instead of exiting.
         process.stdin.pause()
       })
+    }
+    if (!options.readOnly) {
       const size = currentTerminalSize()
       if (size && (size.cols !== session.cols || size.rows !== session.rows)) {
         connection.notify('resize', { sessionId, ...size })
@@ -169,8 +179,8 @@ function currentTerminalSize(): { cols: number; rows: number } | null {
   return cols && rows ? { cols, rows } : null
 }
 
-function enterRawMode(readOnly: boolean): () => void {
-  if (readOnly || !process.stdin.isTTY) {
+function enterRawMode(): () => void {
+  if (!process.stdin.isTTY) {
     return () => {}
   }
   process.stdin.setRawMode(true)

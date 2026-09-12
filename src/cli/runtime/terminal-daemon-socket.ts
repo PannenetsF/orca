@@ -141,28 +141,36 @@ export class TerminalDaemonConnection {
     const control = await openSocket(socketPath, HANDSHAKE_TIMEOUT_MS).catch((err) => {
       throw describeConnectError(err, socketPath)
     })
-    const nextControlMessage = nextMessageReader(control)
-    const controlIdentity = await sendHello(
-      control,
-      token,
-      clientId,
-      'control',
-      nextControlMessage,
-      HANDSHAKE_TIMEOUT_MS
-    )
-    // Why: the daemon silently drops a stream socket connected before the control handshake completes.
-    const stream = await openSocket(socketPath, HANDSHAKE_TIMEOUT_MS)
-    const nextStreamMessage = nextMessageReader(stream)
-    const streamIdentity = await sendHello(
-      stream,
-      token,
-      clientId,
-      'stream',
-      nextStreamMessage,
-      HANDSHAKE_TIMEOUT_MS
-    )
-    assertSameDaemon(controlIdentity, streamIdentity)
-    return new TerminalDaemonConnection(control, stream, nextControlMessage, nextStreamMessage)
+    // Why: once control is open, any later failure must not leak an open socket.
+    let stream: Socket | undefined
+    try {
+      const nextControlMessage = nextMessageReader(control)
+      const controlIdentity = await sendHello(
+        control,
+        token,
+        clientId,
+        'control',
+        nextControlMessage,
+        HANDSHAKE_TIMEOUT_MS
+      )
+      // Why: the daemon silently drops a stream socket connected before the control handshake completes.
+      stream = await openSocket(socketPath, HANDSHAKE_TIMEOUT_MS)
+      const nextStreamMessage = nextMessageReader(stream)
+      const streamIdentity = await sendHello(
+        stream,
+        token,
+        clientId,
+        'stream',
+        nextStreamMessage,
+        HANDSHAKE_TIMEOUT_MS
+      )
+      assertSameDaemon(controlIdentity, streamIdentity)
+      return new TerminalDaemonConnection(control, stream, nextControlMessage, nextStreamMessage)
+    } catch (err) {
+      control.destroy()
+      stream?.destroy()
+      throw err
+    }
   }
 
   private requestCounter = 0
@@ -200,11 +208,14 @@ export class TerminalDaemonConnection {
     this.controlSocket.write(encodeNdjson({ id, type, payload }))
   }
 
-  onEvent(listener: (event: unknown) => void): void {
+  // Why: onClose lets the attach runtime settle its bridge when the daemon drops
+  // the stream (session gone / daemon exit) instead of awaiting forever.
+  onEvent(listener: (event: unknown) => void, onClose?: () => void): void {
     void (async () => {
       for (;;) {
         const event = await this.nextStreamMessage()
         if (event === undefined) {
+          onClose?.()
           return
         }
         listener(event)
