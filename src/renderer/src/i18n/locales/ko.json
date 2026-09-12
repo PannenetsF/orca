@@ -2055,9 +2055,7 @@
         "pluginCommandFailed": "플러그인 명령을 실행할 수 없습니다.",
         "27f10cca63": "채팅, 터미널, 워크트리, 설정 및 작업 검색...",
         "2770f02910": "채팅, 터미널, 워크트리, 설정 및 작업 검색",
-        "recentChatsTerminalsHeader": "최근 채팅 및 터미널",
-        "1ebe225fee": "워크트리, 설정, 탭 및 작업 검색...",
-        "4e4ff044d5": "작업 트리, 설정, 탭 및 작업 검색"
+        "recentChatsTerminalsHeader": "최근 채팅 및 터미널"
       },
       "github": {
         "pr": {
@@ -3051,8 +3049,7 @@
             "d7d496a451": "브라우저 페이지가 더 이상 존재하지 않습니다",
             "7726ce9970": "모바일 에뮬레이터 탭이 더 이상 존재하지 않습니다",
             "chooseAction": "작업을 선택하세요.",
-            "searchProvider": "{{value0}}에서 검색",
-            "39676a184c": "모든 파일, URL, agent를 엽니다..."
+            "searchProvider": "{{value0}}에서 검색"
           },
           "TabBarQuickCommandsButton": {
             "a2c7a33831": "명령",
@@ -5306,19 +5303,6 @@
           "3b7ea51793": "검색 지우기",
           "7f1c2e94a5": "검색어가 너무 깁니다 — 보드가 필터링되지 않았습니다",
           "9a4d0f6b21": "너무 김"
-        },
-        "SshDisconnectedDialog": {
-          "ca4a7892af": "연결 중...",
-          "89385db176": "닫기",
-          "656368f3a2": "재연결 실패",
-          "376bed88e5": "원격 호스트 연결에 오류가 발생했습니다.",
-          "4afcca1d24": "다시 연결",
-          "11552bf786": "SSH 연결 끊김",
-          "cb5938ae79": "다시 연결하는 중...",
-          "disconnected": "이 SSH 호스트는 연결되어 있지 않습니다.",
-          "reconnecting": "원격 호스트에 다시 연결하는 중...",
-          "reconnectionFailed": "원격 호스트에 다시 연결하지 못했습니다.",
-          "authFailed": "원격 호스트 인증에 실패했습니다."
         },
         "CloneTaskRow": {
           "cloneFailed": "Clone failed",
@@ -9763,7 +9747,11 @@
           "search": {
             "description": "repo 소유 레시피가 각 워크스페이스에 고유한 주문형 일회용 환경을 제공하는 방법을 알아보세요.",
             "cloudVmTitle": "클라우드 VM",
-            "title": "워크스페이스별 환경"
+            "keywordVm": "vm",
+            "keywordSandbox": "sandbox",
+            "keywordCloud": "cloud",
+            "keywordRecipe": "recipe",
+            "keywordEphemeral": "ephemeral"
           }
         },
         "EphemeralVmsPane": {

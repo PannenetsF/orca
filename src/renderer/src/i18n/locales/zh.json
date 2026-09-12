@@ -2053,9 +2053,7 @@
         "pluginCommandFailed": "无法运行插件命令。",
         "27f10cca63": "搜索聊天、终端、工作树、设置和操作...",
         "2770f02910": "搜索聊天、终端、工作树、设置和操作",
-        "recentChatsTerminalsHeader": "最近的聊天和终端",
-        "1ebe225fee": "搜索工作树、设置、选项卡和操作...",
-        "4e4ff044d5": "搜索工作树、设置、选项卡和操作"
+        "recentChatsTerminalsHeader": "最近的聊天和终端"
       },
       "github": {
         "pr": {
@@ -3061,8 +3059,7 @@
             "d7d496a451": "浏览器页面已不存在",
             "7726ce9970": "移动模拟器标签页已不存在",
             "chooseAction": "请选择一项操作。",
-            "searchProvider": "使用 {{value0}} 搜索",
-            "39676a184c": "打开任何文件、URL、智能体..."
+            "searchProvider": "使用 {{value0}} 搜索"
           },
           "TabBarQuickCommandsButton": {
             "a2c7a33831": "命令",
@@ -5349,19 +5346,6 @@
           "3b7ea51793": "清除搜索",
           "7f1c2e94a5": "搜索文本过长 — 看板未被筛选",
           "9a4d0f6b21": "过长"
-        },
-        "SshDisconnectedDialog": {
-          "ca4a7892af": "正在连接...",
-          "89385db176": "关闭",
-          "656368f3a2": "重连失败",
-          "376bed88e5": "与远程主机的连接遇到错误。",
-          "4afcca1d24": "重新连接",
-          "11552bf786": "SSH 已断开",
-          "cb5938ae79": "正在重新连接...",
-          "disconnected": "此 SSH 主机未连接。",
-          "reconnecting": "正在重新连接远程主机...",
-          "reconnectionFailed": "重新连接到远程主机失败。",
-          "authFailed": "远程主机身份验证失败。"
         },
         "CloneTaskRow": {
           "cloneFailed": "Clone failed",
@@ -9828,7 +9812,11 @@
           "search": {
             "description": "了解仓库自带的环境模板如何为每个工作区提供按需创建、可丢弃的独立环境。",
             "cloudVmTitle": "云虚拟机",
-            "title": "工作区专属环境"
+            "keywordVm": "vm",
+            "keywordSandbox": "sandbox",
+            "keywordCloud": "cloud",
+            "keywordRecipe": "recipe",
+            "keywordEphemeral": "ephemeral"
           }
         },
         "EphemeralVmsPane": {

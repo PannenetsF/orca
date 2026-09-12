@@ -2050,9 +2050,7 @@
         "pluginCommandFailed": "プラグインのコマンドを実行できませんでした。",
         "27f10cca63": "チャット、ターミナル、ワークツリー、設定、操作を検索します…",
         "2770f02910": "チャット、ターミナル、ワークツリー、設定、操作を検索します",
-        "recentChatsTerminalsHeader": "最近のチャットとターミナル",
-        "1ebe225fee": "ワークツリー、設定、タブ、操作を検索します...",
-        "4e4ff044d5": "ワークツリー、設定、タブ、操作を検索する"
+        "recentChatsTerminalsHeader": "最近のチャットとターミナル"
       },
       "github": {
         "pr": {
@@ -3046,8 +3044,7 @@
             "d7d496a451": "ブラウザページは存在しません",
             "7726ce9970": "モバイルエミュレータのタブは存在しません",
             "chooseAction": "アクションを選択してください。",
-            "searchProvider": "{{value0}} で検索",
-            "39676a184c": "任意のファイル、URL、agent などを開きます..."
+            "searchProvider": "{{value0}} で検索"
           },
           "TabBarQuickCommandsButton": {
             "a2c7a33831": "コマンド",
@@ -5301,19 +5298,6 @@
           "3b7ea51793": "検索をクリア",
           "7f1c2e94a5": "検索テキストが長すぎます — ボードは絞り込まれていません",
           "9a4d0f6b21": "長すぎます"
-        },
-        "SshDisconnectedDialog": {
-          "ca4a7892af": "接続中...",
-          "89385db176": "閉じる",
-          "656368f3a2": "再接続に失敗しました",
-          "376bed88e5": "リモート ホストへの接続でエラーが発生しました。",
-          "4afcca1d24": "再接続",
-          "11552bf786": "SSH が切断されました",
-          "cb5938ae79": "再接続中...",
-          "disconnected": "This remote repository is not connected.",
-          "reconnecting": "リモートホストに再接続中...",
-          "reconnectionFailed": "リモートホストへの再接続に失敗しました。",
-          "authFailed": "リモートホストへの認証に失敗しました。"
         },
         "CloneTaskRow": {
           "cloneFailed": "Clone failed",
@@ -9758,7 +9742,11 @@
           "search": {
             "description": "リポジトリ所有のレシピが各ワークスペースに独自のオンデマンドの使い捨て環境を与える方法を学びましょう。",
             "cloudVmTitle": "クラウド VM",
-            "title": "ワークスペースごとの環境"
+            "keywordVm": "vm",
+            "keywordSandbox": "sandbox",
+            "keywordCloud": "cloud",
+            "keywordRecipe": "recipe",
+            "keywordEphemeral": "ephemeral"
           }
         },
         "EphemeralVmsPane": {

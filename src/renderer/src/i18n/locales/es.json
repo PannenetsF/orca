@@ -2050,9 +2050,7 @@
         "pluginCommandFailed": "No se pudo ejecutar el comando del plugin.",
         "27f10cca63": "Busca chats, terminales, worktrees, ajustes y acciones...",
         "2770f02910": "Busca chats, terminales, worktrees, ajustes y acciones",
-        "recentChatsTerminalsHeader": "Chats y terminales recientes",
-        "1ebe225fee": "Busca worktrees, ajustes, pestañas y acciones...",
-        "4e4ff044d5": "Buscar worktrees, ajustes, pestañas y acciones"
+        "recentChatsTerminalsHeader": "Chats y terminales recientes"
       },
       "github": {
         "pr": {
@@ -3046,8 +3044,7 @@
             "d7d496a451": "La página del navegador ya no existe",
             "7726ce9970": "La pestaña del emulador móvil ya no existe",
             "chooseAction": "Elige una acción.",
-            "searchProvider": "Buscar con {{value0}}",
-            "39676a184c": "Abrir cualquier archivo, URL, agente, ..."
+            "searchProvider": "Buscar con {{value0}}"
           },
           "TabBarQuickCommandsButton": {
             "a2c7a33831": "Comando",
@@ -5301,19 +5298,6 @@
           "3b7ea51793": "Borrar búsqueda",
           "7f1c2e94a5": "El texto de búsqueda es demasiado largo: el tablero no está filtrado",
           "9a4d0f6b21": "Demasiado largo"
-        },
-        "SshDisconnectedDialog": {
-          "ca4a7892af": "Conectando...",
-          "89385db176": "Descartar",
-          "656368f3a2": "Falló la reconexión",
-          "376bed88e5": "La conexión al host remoto encontró un error.",
-          "4afcca1d24": "Reconectar",
-          "11552bf786": "SSH desconectado",
-          "cb5938ae79": "Reconectando...",
-          "disconnected": "Este host SSH no está conectado.",
-          "reconnecting": "Reconectando con el host remoto...",
-          "reconnectionFailed": "Falló la reconexión con el host remoto.",
-          "authFailed": "Falló la autenticación con el host remoto."
         },
         "CloneTaskRow": {
           "cloneFailed": "Clone failed",
@@ -9758,7 +9742,11 @@
           "search": {
             "description": "Aprende cómo las recetas del repositorio dan a cada espacio de trabajo su propio entorno desechable bajo demanda.",
             "cloudVmTitle": "VM en la nube",
-            "title": "Entornos por espacio de trabajo"
+            "keywordVm": "vm",
+            "keywordSandbox": "sandbox",
+            "keywordCloud": "cloud",
+            "keywordRecipe": "recipe",
+            "keywordEphemeral": "ephemeral"
           }
         },
         "EphemeralVmsPane": {
