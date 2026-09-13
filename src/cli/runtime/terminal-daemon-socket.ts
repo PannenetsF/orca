@@ -37,7 +37,9 @@ function nextMessageReader(socket: Socket): (timeoutMs?: number) => Promise<unkn
   socket.on('data', (chunk: Buffer) => parser.feed(decoder.write(chunk)))
   // Why: post-connect errors surface as 'close'; an unhandled 'error' would crash the process.
   socket.on('error', () => {})
+  let closed = false
   socket.once('close', () => {
+    closed = true
     for (const waiter of waiters.splice(0)) {
       clearTimeout(waiter.timer)
       waiter.resolve(undefined)
@@ -46,6 +48,11 @@ function nextMessageReader(socket: Socket): (timeoutMs?: number) => Promise<unkn
   return (timeoutMs) => {
     if (buffered.length > 0) {
       return Promise.resolve(buffered.shift())
+    }
+    // Why: if the socket already closed (possibly before the first read), resolve
+    // undefined immediately instead of waiting forever for a message that can't come.
+    if (closed) {
+      return Promise.resolve(undefined)
     }
     return new Promise((resolve, reject) => {
       const waiter: MessageWaiter = { resolve }

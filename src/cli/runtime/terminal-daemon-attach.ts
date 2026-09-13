@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import type {
   CreateOrAttachResult,
   DaemonEvent,
@@ -67,6 +68,9 @@ export async function attachToTerminalDaemon(
     const restoreTty = enterRawMode()
     teardown.push(restoreTty)
     let detachPrefixPending = false
+    // Why: decode filtered stdin across events so a multibyte character split
+    // between two data events isn't written to the PTY as U+FFFD.
+    const inputDecoder = new StringDecoder('utf8')
     const onStdinData = (chunk: Buffer): void => {
       const scan = scanForDetach(chunk, detachPrefixPending)
       detachPrefixPending = scan.prefixPending
@@ -76,7 +80,10 @@ export async function attachToTerminalDaemon(
       }
       // Why: read-only still scans for the detach key but never writes to the PTY.
       if (!options.readOnly && scan.bytes.length > 0) {
-        connection.notify('write', { sessionId, data: Buffer.from(scan.bytes).toString('utf8') })
+        const data = inputDecoder.write(Buffer.from(scan.bytes))
+        if (data.length > 0) {
+          connection.notify('write', { sessionId, data })
+        }
       }
     }
     const onResize = (): void => {
