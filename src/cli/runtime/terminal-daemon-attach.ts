@@ -72,18 +72,15 @@ export async function attachToTerminalDaemon(
     // between two data events isn't written to the PTY as U+FFFD.
     const inputDecoder = new StringDecoder('utf8')
     const onStdinData = (chunk: Buffer): void => {
-      const scan = scanForDetach(chunk, detachPrefixPending)
-      detachPrefixPending = scan.prefixPending
-      if (scan.detached) {
+      const decoded = decodeStdinChunk(inputDecoder, chunk, detachPrefixPending)
+      detachPrefixPending = decoded.prefixPending
+      if (decoded.detached) {
         endBridge({ kind: 'detach' })
         return
       }
       // Why: read-only still scans for the detach key but never writes to the PTY.
-      if (!options.readOnly && scan.bytes.length > 0) {
-        const data = inputDecoder.write(Buffer.from(scan.bytes))
-        if (data.length > 0) {
-          connection.notify('write', { sessionId, data })
-        }
+      if (!options.readOnly && decoded.data.length > 0) {
+        connection.notify('write', { sessionId, data: decoded.data })
       }
     }
     const onResize = (): void => {
@@ -170,6 +167,25 @@ export function scanForDetach(
     bytes.push(byte)
   }
   return { bytes, detached, prefixPending }
+}
+
+// Why: exported so the split-chunk decode is unit-testable without a TTY; the
+// decoder must be a session-long instance so a char straddling two chunks is
+// buffered instead of emitted as U+FFFD.
+export function decodeStdinChunk(
+  decoder: StringDecoder,
+  chunk: Buffer,
+  prefixPending: boolean
+): { data: string; detached: boolean; prefixPending: boolean } {
+  const scan = scanForDetach(chunk, prefixPending)
+  if (scan.detached) {
+    return { data: '', detached: true, prefixPending: scan.prefixPending }
+  }
+  return {
+    data: decoder.write(Buffer.from(scan.bytes)),
+    detached: false,
+    prefixPending: scan.prefixPending
+  }
 }
 
 function renderSnapshot(snapshot: TerminalSnapshot | null): void {
